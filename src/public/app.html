@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>HID Relay — Console</title>
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <main class="shell wide">
+    <header class="topbar">
+      <div>
+        <h1>HID Console</h1>
+        <p class="muted">Text is typed by the ESP32 as a USB keyboard. Payloads are never shown in logs.</p>
+      </div>
+      <button type="button" class="btn ghost" id="logout-btn">Logout</button>
+    </header>
+
+    <section class="card">
+      <div class="status-row">
+        <span class="label">ESP32</span>
+        <span id="device-badge" class="badge offline" aria-live="polite">Disconnected</span>
+        <span id="ws-badge" class="badge muted-badge" aria-live="polite">WS connecting…</span>
+      </div>
+
+      <label class="field" for="payload">
+        <span>Text to type</span>
+        <textarea
+          id="payload"
+          rows="6"
+          maxlength="2000"
+          placeholder="Type text to send to the device…"
+          spellcheck="false"
+        ></textarea>
+      </label>
+      <div class="meta-row">
+        <span id="char-count" class="muted">0 / 2000</span>
+        <span id="last-action" class="muted" aria-live="polite"></span>
+      </div>
+
+      <div class="actions">
+        <button type="button" class="btn primary" id="send-btn" disabled>Send</button>
+        <span class="hint muted">Enter to send · Shift+Enter for newline</span>
+      </div>
+    </section>
+  </main>
+  <script src="/js/app.js" defer></script>
+</body>
+</html>

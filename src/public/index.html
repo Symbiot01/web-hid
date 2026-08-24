@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>HID Relay — Login</title>
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <main class="shell">
+    <section class="card" aria-labelledby="login-title">
+      <h1 id="login-title">HID Relay</h1>
+      <p class="muted">Enter the shared password to open the console.</p>
+      <form id="login-form" autocomplete="current-password">
+        <label class="field" for="password">
+          <span>Password</span>
+          <input
+            id="password"
+            name="password"
+            type="password"
+            required
+            minlength="1"
+            maxlength="256"
+            autocomplete="current-password"
+            autofocus
+          />
+        </label>
+        <p id="login-error" class="error" hidden role="alert"></p>
+        <button type="submit" class="btn primary" id="login-btn">Enter</button>
+      </form>
+    </section>
+  </main>
+  <script src="/js/login.js" defer></script>
+</body>
+</html>
