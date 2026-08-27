@@ -2,6 +2,23 @@
 
 require('dotenv').config();
 
+const DEFAULT_MEDIA_BASE_URL = 'https://mediarelay.sahilpatel.online';
+const DEFAULT_STUN_URL = 'stun:stun.l.google.com:19302';
+
+/**
+ * @param {string} raw
+ * @returns {string | null} origin like https://host — null if invalid
+ */
+function parseHttpsOrigin(raw) {
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
+    return u.origin;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Load and validate required environment. Exits process on failure.
  * @returns {{
@@ -12,6 +29,9 @@ require('dotenv').config();
  *   host: string,
  *   nodeEnv: string,
  *   trustProxy: boolean,
+ *   mediaBaseUrl: string,
+ *   mediaOrigin: string,
+ *   stunUrl: string,
  * }}
  */
 function loadConfig() {
@@ -39,6 +59,15 @@ function loadConfig() {
     process.exit(1);
   }
 
+  const mediaRaw = (process.env.MEDIA_BASE_URL || DEFAULT_MEDIA_BASE_URL).trim();
+  const mediaOrigin = parseHttpsOrigin(mediaRaw);
+  if (!mediaOrigin) {
+    console.error('[fatal] MEDIA_BASE_URL must be a valid http(s) URL');
+    process.exit(1);
+  }
+  const mediaBaseUrl = mediaRaw.replace(/\/+$/, '');
+  const stunUrl = (process.env.MEDIA_STUN_URL || DEFAULT_STUN_URL).trim();
+
   return {
     gatePassword,
     sessionSecret,
@@ -47,6 +76,9 @@ function loadConfig() {
     host: process.env.HOST || '0.0.0.0',
     nodeEnv,
     trustProxy: process.env.TRUST_PROXY === '1',
+    mediaBaseUrl,
+    mediaOrigin,
+    stunUrl,
   };
 }
 

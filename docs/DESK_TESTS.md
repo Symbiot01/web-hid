@@ -134,6 +134,10 @@ Pass when:
 - Latency sample returns finite p50 (not all decode misses).
 - Leaving Stream-test releases the camera (browser indicator clears).
 
+### Gate 7 troubleshooting — `Failed to fetch` / no Network hit for `/desk/whip`
+
+If the log shows WHIP POST then instant **Failed to fetch**, and DevTools finds **no** `desk/whip` request, check the **Console** for Content-Security-Policy refusals. The HID app must allow `connect-src` to the MediaMTX origin and STUN (see `docs/STREAMTEST_NOTES.md`). Restart HID after CSP changes. Separate from MediaMTX TLS/502 bring-up.
+
 ## Binary live frame (reference)
 
 Little-endian header: `op u8`, `flags u8` (bit0 = seq), `seq u16`.

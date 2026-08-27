@@ -40,7 +40,9 @@ function createApp(opts) {
           'script-src': ["'self'"],
           'style-src': ["'self'"],
           'img-src': ["'self'", 'data:'],
-          'connect-src': ["'self'"],
+          // Stream-test WHIP/WHEP fetch + STUN for ICE (media plane is separate host).
+          'connect-src': ["'self'", config.mediaOrigin, config.stunUrl],
+          'media-src': ["'self'", 'blob:', 'mediastream:'],
           'frame-ancestors': ["'none'"],
           'base-uri': ["'self'"],
           'form-action': ["'self'"],
