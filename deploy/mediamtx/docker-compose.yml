@@ -3,14 +3,22 @@ services:
     build: .
     image: web-hid-mediamtx:local
     restart: unless-stopped
+    # So Coolify/Traefik can reach this container (fixes HTTPS 502).
+    networks:
+      - coolify
     ports:
-      # WHIP / WHEP / built-in player (TCP). Point Coolify HTTPS domain here.
-      - "8889:8889"
-      # WebRTC media (UDP). Must be open on the VPS firewall.
+      # Host publish still needed for WebRTC ICE from the internet.
       - "8189:8189/udp"
       # Optional LAN/debug RTSP (prefer closed on public firewall).
       - "8554:8554"
+    # HTTP WHIP/WHEP: Coolify proxies 443 → container port 8889 (set in UI).
+    # Do not rely on publishing 8889 on the host; expose for clarity.
+    expose:
+      - "8889"
     environment:
-      # Set in Coolify to your public hostname and/or VPS public IP (comma-separated).
       # Example: mediarelay.sahilpatel.online,34.42.4.172
       MTX_WEBRTCADDITIONALHOSTS: ${MTX_WEBRTCADDITIONALHOSTS:-}
+
+networks:
+  coolify:
+    external: true
