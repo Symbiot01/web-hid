@@ -3,6 +3,8 @@
 FROM node:20-alpine AS web-build
 WORKDIR /app/web
 COPY web/package.json web/package-lock.json* ./
+# Coolify often sets NODE_ENV=production; still need vite/typescript to build.
+ENV NODE_ENV=development
 RUN npm ci
 COPY web/ ./
 RUN npm run build
