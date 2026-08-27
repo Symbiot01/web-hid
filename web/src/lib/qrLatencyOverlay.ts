@@ -139,6 +139,14 @@ export async function startQrOverlayPipeline(opts?: {
   raf = requestAnimationFrame(drawFrame);
 
   const stream = canvas.captureStream(fps);
+  const outVideo = stream.getVideoTracks()[0];
+  if (outVideo) {
+    try {
+      outVideo.contentHint = 'detail';
+    } catch {
+      // ignore
+    }
+  }
 
   return {
     canvas,

@@ -455,6 +455,48 @@ textarea:focus,
   font-size: 0.85rem;
 }
 
+.streamtest-clickable {
+  cursor: pointer;
+}
+
+.streamtest-clickable:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.streamtest-stills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.streamtest-still {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: 160px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #010409;
+  color: var(--muted);
+  font-size: 0.7rem;
+  cursor: pointer;
+  overflow: hidden;
+  text-align: left;
+}
+
+.streamtest-still img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+}
+
+.streamtest-still span {
+  padding: 0.25rem 0.4rem;
+}
+
 .streamtest-log {
   max-height: 220px;
   overflow: auto;

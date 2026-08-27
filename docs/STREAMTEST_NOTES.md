@@ -26,6 +26,7 @@ This is **not** a MediaMTX cert/502 problem (TLS to mediarelay can be fine while
 
 ## Related
 
+- First desk results + bottlenecks: `docs/STREAMTEST_LOG.md`
 - Gate 7: `docs/DESK_TESTS.md`
 - MediaMTX Coolify: `docs/MEDIAMTX_COOLIFY_CASESTUDY.md`, `deploy/mediamtx/README.md`
 - Client media URL: `web/src/lib/mediaConfig.ts` (`VITE_MEDIA_BASE_URL`)

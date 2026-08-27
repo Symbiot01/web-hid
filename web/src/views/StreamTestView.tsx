@@ -11,6 +11,13 @@ import {
 } from '../lib/qrLatencyOverlay';
 import { startWhep, type WhepSession } from '../lib/whep';
 import { startWhip, type WhipSession } from '../lib/whip';
+import {
+  downloadSnapshot,
+  revokeSnapshot,
+  snapshotFromCanvas,
+  snapshotFromVideo,
+  type FrameSnapshot,
+} from '../lib/snapshotFrame';
 
 const SAMPLE_ATTEMPTS = 50;
 const SAMPLE_INTERVAL_MS = 200;
@@ -75,6 +82,7 @@ export function StreamTestView({ active }: Props) {
   const [results, setResults] = useState<StreamTestResult[]>([]);
   const [statsSnap, setStatsSnap] = useState<PeerStatsSnapshot[]>([]);
   const [cameraNote, setCameraNote] = useState('');
+  const [stills, setStills] = useState<FrameSnapshot[]>([]);
 
   const abortRef = useRef(false);
   const overlayRef = useRef<OverlayPipeline | null>(null);
@@ -137,9 +145,55 @@ export function StreamTestView({ active }: Props) {
     return () => {
       abortRef.current = true;
       void teardown();
+      setStills((prev) => {
+        prev.forEach(revokeSnapshot);
+        return [];
+      });
     };
   }, [teardown]);
 
+  async function captureLocalStill() {
+    const canvas = overlayRef.current?.canvas;
+    if (!canvas) {
+      setStatus('No local canvas — Start loopback first.');
+      return;
+    }
+    try {
+      const snap = await snapshotFromCanvas(canvas, 'local');
+      setStills((prev) => {
+        const next = [snap, ...prev].slice(0, 8);
+        prev.slice(7).forEach(revokeSnapshot);
+        return next;
+      });
+      downloadSnapshot(snap);
+      appendLog(`Still local ${snap.width}x${snap.height} JPEG`);
+      setStatus(`Saved local still ${snap.width}×${snap.height} (full canvas, not RTP).`);
+    } catch (err) {
+      appendLog(`Still local failed: ${(err as Error).message}`);
+      setStatus(`Still failed: ${(err as Error).message}`);
+    }
+  }
+
+  async function captureReceivedStill() {
+    const video = remoteVideoRef.current;
+    if (!video) return;
+    try {
+      const snap = await snapshotFromVideo(video, 'received');
+      setStills((prev) => {
+        const next = [snap, ...prev].slice(0, 8);
+        prev.slice(7).forEach(revokeSnapshot);
+        return next;
+      });
+      downloadSnapshot(snap);
+      appendLog(`Still received ${snap.width}x${snap.height} JPEG`);
+      setStatus(
+        `Saved received still ${snap.width}×${snap.height} (WHEP decoded size — may be softer than local).`
+      );
+    } catch (err) {
+      appendLog(`Still received failed: ${(err as Error).message}`);
+      setStatus(`Still failed: ${(err as Error).message}`);
+    }
+  }
   async function startLoopback() {
     if (!armed || looping || busy) return;
     abortRef.current = false;
@@ -178,6 +232,7 @@ export function StreamTestView({ active }: Props) {
       setStatus('WHIP publish…');
       const whip = await startWhip(whipUrl(), overlay.stream, {
         onLog: appendLog,
+        highQuality: true,
       });
       if (abortRef.current) {
         await whip.stop();
@@ -367,25 +422,44 @@ export function StreamTestView({ active }: Props) {
       <p className="selftest-warn">
         Same-PC loopback: camera → QR timestamp overlay → WHIP{' '}
         <code>/{mediaPath()}/whip</code> → MediaMTX → WHEP → this page. Measures glass-to-glass
-        on one clock. Prefer 1080p; actual capture is noted in logs. Path{' '}
-        <code>desk</code> is separate from Pi <code>cam</code>. MediaMTX publish is currently
-        open — anyone who can reach the WHIP URL can publish until auth is tightened. Redeploy
-        MediaMTX after adding the <code>desk</code> path.
+        on one clock. Prefer 1080p; actual capture is noted in logs. Use{' '}
+        <strong>Snap local</strong> (or click the local pane) for a sharp JPEG of the full
+        1920×1080 canvas — independent of WebRTC ABR. Path <code>desk</code> is separate from
+        Pi <code>cam</code>. MediaMTX publish is currently open until auth is tightened.
       </p>
 
       <div className="streamtest-grid">
         <figure className="streamtest-pane">
-          <figcaption>Local (publish canvas)</figcaption>
-          <div ref={localMountRef} className="streamtest-video-slot" />
+          <figcaption>Local (publish canvas) — click to snap 1080 JPEG</figcaption>
+          <div
+            ref={localMountRef}
+            className="streamtest-video-slot streamtest-clickable"
+            role="button"
+            tabIndex={0}
+            title="Click to save full-resolution local still"
+            onClick={() => {
+              if (looping || overlayRef.current) void captureLocalStill();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                if (looping || overlayRef.current) void captureLocalStill();
+              }
+            }}
+          />
         </figure>
         <figure className="streamtest-pane">
-          <figcaption>Received (WHEP)</figcaption>
+          <figcaption>Received (WHEP) — click to snap decoded frame</figcaption>
           <video
             ref={remoteVideoRef}
-            className="streamtest-video"
+            className="streamtest-video streamtest-clickable"
             playsInline
             muted
             autoPlay
+            title="Click to save received still"
+            onClick={() => {
+              if (looping) void captureReceivedStill();
+            }}
           />
         </figure>
       </div>
@@ -427,6 +501,24 @@ export function StreamTestView({ active }: Props) {
           onClick={() => void refreshStats()}
         >
           Snapshot getStats
+        </button>
+        <button
+          type="button"
+          className="btn ghost"
+          disabled={!looping}
+          title="Full 1920×1080 JPEG from local canvas (not RTP)"
+          onClick={() => void captureLocalStill()}
+        >
+          Snap local (1080)
+        </button>
+        <button
+          type="button"
+          className="btn ghost"
+          disabled={!looping}
+          title="JPEG from WHEP video at decoded resolution"
+          onClick={() => void captureReceivedStill()}
+        >
+          Snap received
         </button>
         <button type="button" className="btn ghost" disabled={!canStop} onClick={() => void stopLoopback()}>
           Stop
@@ -511,6 +603,25 @@ export function StreamTestView({ active }: Props) {
               ))}
             </tbody>
           </table>
+        </div>
+      ) : null}
+
+      {stills.length > 0 ? (
+        <div className="streamtest-stills" aria-label="Recent stills">
+          {stills.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              className="streamtest-still"
+              title={`${s.source} ${s.width}×${s.height} — click to re-download`}
+              onClick={() => downloadSnapshot(s)}
+            >
+              <img src={s.objectUrl} alt={`${s.source} ${s.width}x${s.height}`} />
+              <span>
+                {s.source} {s.width}×{s.height}
+              </span>
+            </button>
+          ))}
         </div>
       ) : null}
 
