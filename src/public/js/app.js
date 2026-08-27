@@ -23,13 +23,37 @@
   const focusLast = document.getElementById('focus-last');
   const splitLast = document.getElementById('split-last');
 
+  const mouseTestButtons = {
+    focus: {
+      square: document.getElementById('focus-mouse-square'),
+      up: document.getElementById('focus-mouse-up'),
+      down: document.getElementById('focus-mouse-down'),
+      left: document.getElementById('focus-mouse-left'),
+      right: document.getElementById('focus-mouse-right'),
+    },
+    split: {
+      square: document.getElementById('split-mouse-square'),
+      up: document.getElementById('split-mouse-up'),
+      down: document.getElementById('split-mouse-down'),
+      left: document.getElementById('split-mouse-left'),
+      right: document.getElementById('split-mouse-right'),
+    },
+  };
+
   let deviceConnected = false;
   let liveActive = false;
-  /** @type {'none'|'hid'|'scratch'} */
+  /** @type {'none'|'hid'} */
   let inputTarget = 'none';
   let currentView = 'focus';
   const heldCodes = new Set();
   let mouseButtons = 0;
+  let squareTimer = null;
+  let squareRunning = false;
+
+  const NUDGE_PX = 80;
+  const SQUARE_SIDE = 240;
+  const SQUARE_STEP = 40;
+  const SQUARE_MS = 30;
 
   const {
     hidUsageFromCode,
@@ -64,10 +88,23 @@
 
   function refreshButtons() {
     const canLive = deviceConnected && socket.isOpen() && !liveActive && currentView !== 'paste';
+    const canMouseTest = deviceConnected && socket.isOpen() && liveActive && currentView !== 'paste';
     focusLiveStart.disabled = !canLive;
     splitLiveStart.disabled = !canLive;
     focusLiveStop.disabled = !liveActive;
     splitLiveStop.disabled = !liveActive;
+    for (const group of Object.values(mouseTestButtons)) {
+      for (const btn of Object.values(group)) {
+        if (!btn) {
+          continue;
+        }
+        if (btn === group.square) {
+          btn.disabled = !canMouseTest || squareRunning;
+        } else {
+          btn.disabled = !canMouseTest || squareRunning;
+        }
+      }
+    }
     pasteSend.disabled = !(
       deviceConnected &&
       pasteText.value.length > 0 &&
@@ -88,6 +125,91 @@
 
   function hintEl() {
     return currentView === 'split' ? splitHint : focusHint;
+  }
+
+  /** Test / scripted mouse — no pointer lock required. */
+  function canSendScriptedMouse() {
+    return (
+      liveActive &&
+      inputTarget === 'hid' &&
+      currentView !== 'paste' &&
+      deviceConnected &&
+      socket.isOpen()
+    );
+  }
+
+  function sendScriptedMouse(dx, dy, wheel, buttons) {
+    if (!canSendScriptedMouse()) {
+      return false;
+    }
+    mouseButtons = (buttons == null ? mouseButtons : buttons) & 0x07;
+    socket.sendBinary(buildMouseFrame(mouseButtons, dx, dy, wheel || 0));
+    return true;
+  }
+
+  function cancelSquare() {
+    if (squareTimer != null) {
+      clearTimeout(squareTimer);
+      squareTimer = null;
+    }
+    squareRunning = false;
+    refreshButtons();
+  }
+
+  function nudgeMouse(dx, dy) {
+    if (!sendScriptedMouse(dx, dy, 0, 0)) {
+      return;
+    }
+    setLastKey(`Last key: mouse nudge ${dx},${dy}`);
+  }
+
+  /**
+   * Walk a closed square with relative moves: right → down → left → up.
+   */
+  function runMouseSquare() {
+    if (!canSendScriptedMouse() || squareRunning) {
+      return;
+    }
+    const sides = [
+      { dx: 1, dy: 0, remain: SQUARE_SIDE },
+      { dx: 0, dy: 1, remain: SQUARE_SIDE },
+      { dx: -1, dy: 0, remain: SQUARE_SIDE },
+      { dx: 0, dy: -1, remain: SQUARE_SIDE },
+    ];
+    let sideIdx = 0;
+    squareRunning = true;
+    refreshButtons();
+    setLastKey('Last key: mouse square test…');
+
+    function step() {
+      squareTimer = null;
+      if (!canSendScriptedMouse()) {
+        cancelSquare();
+        setLastKey('Last key: (square cancelled)');
+        return;
+      }
+      if (sideIdx >= sides.length) {
+        squareRunning = false;
+        refreshButtons();
+        setLastKey('Last key: mouse square done');
+        return;
+      }
+      const side = sides[sideIdx];
+      const mag = Math.min(SQUARE_STEP, side.remain);
+      const dx = side.dx * mag;
+      const dy = side.dy * mag;
+      side.remain -= mag;
+      if (!sendScriptedMouse(dx, dy, 0, 0)) {
+        cancelSquare();
+        return;
+      }
+      if (side.remain <= 0) {
+        sideIdx += 1;
+      }
+      squareTimer = setTimeout(step, SQUARE_MS);
+    }
+
+    step();
   }
 
   async function lockKeyboard() {
@@ -213,6 +335,7 @@
     if (!liveActive) {
       unlockKeyboard();
       exitPointerLock();
+      cancelSquare();
       refreshButtons();
       return;
     }
@@ -222,6 +345,7 @@
     markVideoFocus(false);
     unlockKeyboard();
     exitPointerLock();
+    cancelSquare();
     sendReleaseAll();
     refreshButtons();
     hintEl().textContent = '';
@@ -240,11 +364,7 @@
     if (currentView === 'paste') {
       return;
     }
-    // Scratch has focus: do not steal keys
-    if (document.activeElement === scratch) {
-      return;
-    }
-
+    // While live, keys always go to HID (scratch must not keep them local).
     event.preventDefault();
     event.stopPropagation();
     if (action === 'down' && event.repeat) {
@@ -391,10 +511,10 @@
 
   scratch.addEventListener('focus', () => {
     if (liveActive) {
-      inputTarget = 'scratch';
-      markVideoFocus(false);
+      // Keep HID as the key target; only drop pointer lock so the operator can use the pad UI.
+      inputTarget = 'hid';
       exitPointerLock();
-      sendReleaseAll();
+      hintEl().textContent = 'Live on — keys still go to HID. Click video to re-lock mouse.';
     }
   });
 
@@ -404,6 +524,32 @@
       markVideoFocus(true);
     }
   });
+
+  function wireMouseTests(group) {
+    group.square.addEventListener('click', (event) => {
+      event.stopPropagation();
+      runMouseSquare();
+    });
+    group.up.addEventListener('click', (event) => {
+      event.stopPropagation();
+      nudgeMouse(0, -NUDGE_PX);
+    });
+    group.down.addEventListener('click', (event) => {
+      event.stopPropagation();
+      nudgeMouse(0, NUDGE_PX);
+    });
+    group.left.addEventListener('click', (event) => {
+      event.stopPropagation();
+      nudgeMouse(-NUDGE_PX, 0);
+    });
+    group.right.addEventListener('click', (event) => {
+      event.stopPropagation();
+      nudgeMouse(NUDGE_PX, 0);
+    });
+  }
+
+  wireMouseTests(mouseTestButtons.focus);
+  wireMouseTests(mouseTestButtons.split);
 
   function onMouseMove(event) {
     if (!canSendMouse() || document.pointerLockElement !== activeStage()) {

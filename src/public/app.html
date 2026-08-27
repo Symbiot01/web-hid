@@ -44,6 +44,12 @@
         <div class="video-chrome">
           <button type="button" class="btn primary" id="focus-live-start" disabled>Start live</button>
           <button type="button" class="btn ghost" id="focus-live-stop" disabled>Stop</button>
+          <span class="chrome-sep" aria-hidden="true"></span>
+          <button type="button" class="btn ghost" id="focus-mouse-square" disabled title="Move target cursor in a square">Square</button>
+          <button type="button" class="btn ghost btn-icon" id="focus-mouse-up" disabled title="Nudge up">↑</button>
+          <button type="button" class="btn ghost btn-icon" id="focus-mouse-left" disabled title="Nudge left">←</button>
+          <button type="button" class="btn ghost btn-icon" id="focus-mouse-down" disabled title="Nudge down">↓</button>
+          <button type="button" class="btn ghost btn-icon" id="focus-mouse-right" disabled title="Nudge right">→</button>
           <span id="focus-hint" class="hint muted"></span>
         </div>
       </div>
@@ -61,15 +67,21 @@
           <div class="video-chrome">
             <button type="button" class="btn primary" id="split-live-start" disabled>Start live</button>
             <button type="button" class="btn ghost" id="split-live-stop" disabled>Stop</button>
+            <span class="chrome-sep" aria-hidden="true"></span>
+            <button type="button" class="btn ghost" id="split-mouse-square" disabled title="Move target cursor in a square">Square</button>
+            <button type="button" class="btn ghost btn-icon" id="split-mouse-up" disabled title="Nudge up">↑</button>
+            <button type="button" class="btn ghost btn-icon" id="split-mouse-left" disabled title="Nudge left">←</button>
+            <button type="button" class="btn ghost btn-icon" id="split-mouse-down" disabled title="Nudge down">↓</button>
+            <button type="button" class="btn ghost btn-icon" id="split-mouse-right" disabled title="Nudge right">→</button>
           </div>
         </div>
         <div class="scratch-pane">
           <label class="field" for="scratch">
-            <span>Local scratch (not sent to target)</span>
+            <span>Scratch notes (while live, keystrokes still go to HID)</span>
             <textarea
               id="scratch"
               rows="16"
-              placeholder="Notes stay on this browser…"
+              placeholder="Local notes — typing while live is forwarded to the target…"
               spellcheck="false"
             ></textarea>
           </label>
