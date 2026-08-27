@@ -92,6 +92,27 @@ Pass when:
 - Keys still work in the same live session.
 - Scratch focus does not move the target mouse.
 
+## Gate 6 — Same-PC Self-test
+
+Plug the ESP32 into the **operator** PC (the machine running the browser), not a second target.
+
+1. Open `/app` → **Self-test** tab.
+2. Click the hit pad, enable **Arm**.
+3. Run **Keyboard RTT** — table shows down/up p50 and loss%.
+4. Keep the hit pad focused; run **Click RTT**.
+5. Run **Burst 100/s** and **Burst 250/s** — note loss%.
+6. Run **Square smoke** — wall-clock completes.
+7. **Abort** mid-run once; confirm status aborts and keys/buttons release.
+8. **Copy JSON** — clipboard has `when`, `pathHint`, `tests`.
+9. Leave Self-test (switch to Focus) — inject stops; no stuck modifiers.
+
+Pass when:
+
+- Keyboard down p50 is finite (not all misses) with the dongle on this PC.
+- Click RTT records hits while the pad is focused.
+- Received HID events never re-inject (no feedback loop / stuck repeating keys).
+- No extra auth beyond the existing gate login.
+
 ## Binary live frame (reference)
 
 Little-endian header: `op u8`, `flags u8` (bit0 = seq), `seq u16`.

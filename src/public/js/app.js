@@ -42,18 +42,25 @@
 
   let deviceConnected = false;
   let liveActive = false;
-  /** @type {'none'|'hid'} */
+  /** @type {'none'|'hid'|'measure'} */
   let inputTarget = 'none';
   let currentView = 'focus';
   const heldCodes = new Set();
   let mouseButtons = 0;
   let squareTimer = null;
   let squareRunning = false;
+  /** @type {ReturnType<typeof window.createSelfTest>|null} */
+  let selfTest = null;
+
+  function isOperatorView() {
+    return currentView === 'focus' || currentView === 'split';
+  }
 
   const NUDGE_PX = 80;
+  // Match a real pointer: tiny deltas at ~125 Hz (not one big jump).
   const SQUARE_SIDE = 240;
-  const SQUARE_STEP = 40;
-  const SQUARE_MS = 30;
+  const SQUARE_STEP = 3;
+  const SQUARE_MS = 8;
 
   const {
     hidUsageFromCode,
@@ -72,6 +79,10 @@
     if (!deviceConnected && liveActive) {
       stopLive('Device disconnected');
     }
+    if (!deviceConnected && selfTest) {
+      selfTest.abort();
+      selfTest.refresh();
+    }
     refreshButtons();
   }
 
@@ -87,8 +98,14 @@
   }
 
   function refreshButtons() {
-    const canLive = deviceConnected && socket.isOpen() && !liveActive && currentView !== 'paste';
-    const canMouseTest = deviceConnected && socket.isOpen() && liveActive && currentView !== 'paste';
+    const canLive =
+      deviceConnected &&
+      socket.isOpen() &&
+      !liveActive &&
+      isOperatorView() &&
+      !(selfTest && selfTest.isBusy());
+    const canMouseTest =
+      deviceConnected && socket.isOpen() && liveActive && isOperatorView();
     focusLiveStart.disabled = !canLive;
     splitLiveStart.disabled = !canLive;
     focusLiveStop.disabled = !liveActive;
@@ -98,11 +115,7 @@
         if (!btn) {
           continue;
         }
-        if (btn === group.square) {
-          btn.disabled = !canMouseTest || squareRunning;
-        } else {
-          btn.disabled = !canMouseTest || squareRunning;
-        }
+        btn.disabled = !canMouseTest || squareRunning;
       }
     }
     pasteSend.disabled = !(
@@ -111,6 +124,9 @@
       !liveActive &&
       currentView === 'paste'
     );
+    if (selfTest) {
+      selfTest.refresh();
+    }
   }
 
   function sendReleaseAll() {
@@ -132,7 +148,7 @@
     return (
       liveActive &&
       inputTarget === 'hid' &&
-      currentView !== 'paste' &&
+      isOperatorView() &&
       deviceConnected &&
       socket.isOpen()
     );
@@ -156,33 +172,90 @@
     refreshButtons();
   }
 
-  function nudgeMouse(dx, dy) {
-    if (!sendScriptedMouse(dx, dy, 0, 0)) {
+  /**
+   * Emit relative moves along one axis as a stream of small frames.
+   * @param {number} totalDx
+   * @param {number} totalDy
+   * @param {string} label
+   * @param {() => void} [onDone]
+   */
+  function runMicroMoves(totalDx, totalDy, label, onDone) {
+    const absX = Math.abs(totalDx);
+    const absY = Math.abs(totalDy);
+    if (absX === 0 && absY === 0) {
+      if (onDone) {
+        onDone();
+      }
       return;
     }
-    setLastKey(`Last key: mouse nudge ${dx},${dy}`);
+    const signX = totalDx === 0 ? 0 : totalDx > 0 ? 1 : -1;
+    const signY = totalDy === 0 ? 0 : totalDy > 0 ? 1 : -1;
+    let remain = Math.max(absX, absY);
+    const stepPx = SQUARE_STEP;
+    const interval = SQUARE_MS;
+
+    function step() {
+      squareTimer = null;
+      if (!canSendScriptedMouse()) {
+        cancelSquare();
+        setLastKey('Last key: (mouse move cancelled)');
+        return;
+      }
+      if (remain <= 0) {
+        squareRunning = false;
+        refreshButtons();
+        if (onDone) {
+          onDone();
+        }
+        return;
+      }
+      const mag = Math.min(stepPx, remain);
+      const dx = signX * (absX > 0 ? mag : 0);
+      const dy = signY * (absY > 0 ? mag : 0);
+      remain -= mag;
+      if (!sendScriptedMouse(dx, dy, 0, 0)) {
+        cancelSquare();
+        return;
+      }
+      squareTimer = setTimeout(step, interval);
+    }
+
+    squareRunning = true;
+    refreshButtons();
+    if (label) {
+      setLastKey(label);
+    }
+    step();
+  }
+
+  function nudgeMouse(dx, dy) {
+    if (!canSendScriptedMouse() || squareRunning) {
+      return;
+    }
+    runMicroMoves(dx, dy, `Last key: mouse nudge ${dx},${dy}`, () => {
+      setLastKey(`Last key: mouse nudge ${dx},${dy} done`);
+    });
   }
 
   /**
-   * Walk a closed square with relative moves: right → down → left → up.
+   * Walk a closed square with human-like micro moves: right → down → left → up.
    */
   function runMouseSquare() {
     if (!canSendScriptedMouse() || squareRunning) {
       return;
     }
     const sides = [
-      { dx: 1, dy: 0, remain: SQUARE_SIDE },
-      { dx: 0, dy: 1, remain: SQUARE_SIDE },
-      { dx: -1, dy: 0, remain: SQUARE_SIDE },
-      { dx: 0, dy: -1, remain: SQUARE_SIDE },
+      { dx: SQUARE_SIDE, dy: 0 },
+      { dx: 0, dy: SQUARE_SIDE },
+      { dx: -SQUARE_SIDE, dy: 0 },
+      { dx: 0, dy: -SQUARE_SIDE },
     ];
     let sideIdx = 0;
     squareRunning = true;
     refreshButtons();
     setLastKey('Last key: mouse square test…');
 
-    function step() {
-      squareTimer = null;
+    function runSide() {
       if (!canSendScriptedMouse()) {
         cancelSquare();
         setLastKey('Last key: (square cancelled)');
@@ -195,21 +268,13 @@
         return;
       }
       const side = sides[sideIdx];
-      const mag = Math.min(SQUARE_STEP, side.remain);
-      const dx = side.dx * mag;
-      const dy = side.dy * mag;
-      side.remain -= mag;
-      if (!sendScriptedMouse(dx, dy, 0, 0)) {
-        cancelSquare();
-        return;
-      }
-      if (side.remain <= 0) {
-        sideIdx += 1;
-      }
-      squareTimer = setTimeout(step, SQUARE_MS);
+      sideIdx += 1;
+      // runMicroMoves sets squareRunning; chain sides via onDone
+      squareRunning = false;
+      runMicroMoves(side.dx, side.dy, null, runSide);
     }
 
-    step();
+    runSide();
   }
 
   async function lockKeyboard() {
@@ -281,7 +346,7 @@
   }
 
   function canSendMouse() {
-    return liveActive && inputTarget === 'hid' && currentView !== 'paste';
+    return liveActive && inputTarget === 'hid' && isOperatorView();
   }
 
   function sendMouse(dx, dy, wheel, buttons) {
@@ -312,7 +377,10 @@
   }
 
   async function startLive() {
-    if (!deviceConnected || !socket.isOpen() || liveActive || currentView === 'paste') {
+    if (!deviceConnected || !socket.isOpen() || liveActive || !isOperatorView()) {
+      return;
+    }
+    if (selfTest && selfTest.isBusy()) {
       return;
     }
     liveActive = true;
@@ -358,6 +426,10 @@
   }
 
   function onKeyEvent(event, action) {
+    // Self-test / measure: never echo OS HID back to the device.
+    if (currentView === 'selftest' || inputTarget === 'measure') {
+      return;
+    }
     if (!liveActive || inputTarget !== 'hid') {
       return;
     }
@@ -401,6 +473,10 @@
     if (liveActive) {
       stopLive('view switch');
     }
+    if (currentView === 'selftest' && selfTest) {
+      selfTest.leave();
+    }
+
     currentView = name;
     document.querySelectorAll('.view').forEach((el) => {
       const match = el.getAttribute('data-view') === name;
@@ -412,6 +488,16 @@
       tab.classList.toggle('active', match);
       tab.setAttribute('aria-selected', match ? 'true' : 'false');
     });
+
+    if (name === 'selftest') {
+      inputTarget = 'measure';
+      if (selfTest) {
+        selfTest.enter();
+      }
+    } else if (inputTarget === 'measure') {
+      inputTarget = 'none';
+    }
+
     refreshButtons();
   }
 
@@ -464,6 +550,9 @@
     onClose() {
       wsBadge.textContent = 'WS disconnected';
       stopLive('WebSocket disconnected');
+      if (selfTest) {
+        selfTest.abort();
+      }
       refreshButtons();
     },
     onStatus(connected) {
@@ -477,6 +566,21 @@
       if (currentView === 'paste') {
         pasteStatus.textContent = message;
       }
+    },
+  });
+
+  selfTest = window.createSelfTest({
+    isDeviceReady() {
+      return deviceConnected && socket.isOpen();
+    },
+    sendBinary(buf) {
+      socket.sendBinary(buf);
+    },
+    sendReleaseAll() {
+      sendReleaseAll();
+    },
+    onBusyChange() {
+      refreshButtons();
     },
   });
 

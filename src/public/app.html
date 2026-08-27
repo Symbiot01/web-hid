@@ -32,6 +32,7 @@
       <button type="button" class="tab active" data-view="focus" role="tab" aria-selected="true">Focus</button>
       <button type="button" class="tab" data-view="split" role="tab" aria-selected="false">Split</button>
       <button type="button" class="tab" data-view="paste" role="tab" aria-selected="false">Paste</button>
+      <button type="button" class="tab" data-view="selftest" role="tab" aria-selected="false">Self-test</button>
     </nav>
 
     <!-- Focus: full-bleed placeholder video -->
@@ -114,9 +115,65 @@
         </div>
       </section>
     </section>
+
+    <!-- Self-test: same-PC HID loopback latency -->
+    <section id="view-selftest" class="view" data-view="selftest" hidden>
+      <section class="card selftest-card">
+        <p class="selftest-warn">
+          Plug the ESP32 into <strong>this</strong> PC (the one running the browser).
+          Keep the hit pad focused for keyboard tests. For click tests, also leave the
+          system cursor over the hit pad. Do not type during a run.
+          Received HID events are measured only; they are never re-sent to the device.
+        </p>
+        <div
+          id="selftest-pad"
+          class="selftest-pad"
+          tabindex="0"
+          role="application"
+          aria-label="Self-test hit pad"
+        >
+          <span id="selftest-pad-label">Hit pad — click here, then Arm</span>
+        </div>
+        <div class="selftest-controls">
+          <label class="selftest-arm">
+            <input type="checkbox" id="selftest-arm" />
+            <span>Arm</span>
+          </label>
+          <button type="button" class="btn primary" id="selftest-run-keyboard" disabled>Keyboard RTT</button>
+          <button type="button" class="btn ghost" id="selftest-run-click" disabled>Click RTT</button>
+          <button type="button" class="btn ghost" id="selftest-run-burst-100" disabled>Burst 100/s</button>
+          <button type="button" class="btn ghost" id="selftest-run-burst-250" disabled>Burst 250/s</button>
+          <button type="button" class="btn ghost" id="selftest-run-square" disabled>Square smoke</button>
+          <button type="button" class="btn ghost" id="selftest-abort" disabled>Abort</button>
+          <button type="button" class="btn ghost" id="selftest-copy" disabled>Copy JSON</button>
+        </div>
+        <p id="selftest-status" class="muted selftest-status" aria-live="polite">Idle — Arm to enable inject tests.</p>
+        <div class="selftest-table-wrap">
+          <table class="selftest-table" id="selftest-results">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>n</th>
+                <th>p50</th>
+                <th>p95</th>
+                <th>p99</th>
+                <th>loss%</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody id="selftest-results-body">
+              <tr class="empty">
+                <td colspan="7">No runs yet</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
   </main>
   <script src="/js/keymap.js" defer></script>
   <script src="/js/hid-socket.js" defer></script>
+  <script src="/js/selftest.js" defer></script>
   <script src="/js/app.js" defer></script>
 </body>
 </html>
