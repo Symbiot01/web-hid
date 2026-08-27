@@ -15,10 +15,10 @@ Config is **copied into the image** via `Dockerfile` (no bind-mount of `mediamtx
 4. Env (required for WebRTC ICE):
 
    ```
-   MTX_WEBRTCADDITIONALHOSTS=mediarelay.sahilpatel.online,34.42.4.172
+   MTX_WEBRTCADDITIONALHOSTS=mediarelay.sahilpatel.online,34.47.241.10
    ```
 
-5. VPS firewall: allow **443/tcp** (proxy) and **8189/udp** (WebRTC ICE).  
+5. VPS / GCP firewall: **443/tcp**, **8189/udp** (WebRTC), **8890/udp** (SRT Pi ingest, rule `allow-testin-srt`).  
    Do not expose **8554** publicly unless you need RTSP debug.
 
 ### If a previous deploy failed on the yml mount
@@ -38,7 +38,8 @@ Then redeploy.
 | Role | URL |
 |---|---|
 | Built-in test page | `https://mediarelay…/cam` |
-| Pi / ffmpeg publish (WHIP) | `https://mediarelay…/cam/whip` |
+| Pi / ffmpeg publish (SRT) | `srt://mediarelay…:8890?streamid=publish:cam&pkt_size=1316` |
+| Pi WHIP (not used yet) | `https://mediarelay…/cam/whip` |
 | Browser play (WHEP) | `https://mediarelay…/cam/whep` |
 | RTSP debug | `rtsp://VPS_IP:8554/cam` |
 
@@ -62,6 +63,11 @@ Exact paths follow [MediaMTX WebRTC docs](https://mediamtx.org/docs/).
 2. Publish a test stream (OBS WHIP or ffmpeg) to `/cam/whip`, **or** use console **Stream-test** against `/desk`.
 3. Open `/cam` (or `/desk`) / WHEP in a browser from another network.
 4. Then point the Pi camera publisher at the WHIP URL on `cam`.
+
+## Ingest note (Pi Slice C)
+
+Browser Stream-test uses **WHIP** on path `desk` (443 + UDP 8189).  
+Pi live publish currently uses **SRT** on path `cam` (UDP **8890**) because stock ffmpeg could not WHIP — see `capture/docs/SLICE_C_SRT.md` in the capture repo.
 
 ## Auth
 

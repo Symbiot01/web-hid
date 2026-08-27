@@ -12,7 +12,10 @@ rtspAddress: :8554
 # Not needed for Pi → browser WHIP/WHEP MVP
 rtmp: no
 hls: no
-srt: no
+
+# Pi Slice C ingest (stock ffmpeg cannot WHIP). GCP: UDP 8890 → tag testin.
+srt: yes
+srtAddress: :8890
 
 # WebRTC: WHIP publish + WHEP play on :8889; ICE on UDP :8189
 webrtc: yes

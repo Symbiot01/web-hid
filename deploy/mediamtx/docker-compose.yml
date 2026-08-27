@@ -9,6 +9,8 @@ services:
     ports:
       # Host publish still needed for WebRTC ICE from the internet.
       - "8189:8189/udp"
+      # Pi SRT publish (path cam). Firewall: allow-testin-srt udp:8890.
+      - "8890:8890/udp"
       # Optional LAN/debug RTSP (prefer closed on public firewall).
       - "8554:8554"
     # HTTP WHIP/WHEP: Coolify proxies 443 → container port 8889 (set in UI).
