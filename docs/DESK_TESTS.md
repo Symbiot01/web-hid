@@ -114,6 +114,26 @@ Pass when:
 - Received HID events never re-inject (no feedback loop / stuck repeating keys).
 - No extra auth beyond the existing gate login.
 
+## Gate 7 — Stream-test loopback (glass-to-glass)
+
+Requires MediaMTX with path **`desk`** deployed (HTTPS domain + UDP ICE), and a camera on the operator PC. Uses `VITE_MEDIA_BASE_URL` (default `https://mediarelay.sahilpatel.online`). Path `desk` is separate from Pi `cam`.
+
+**Security note:** MediaMTX publish/read on `desk` is open until auth is tightened — anyone who can reach `/desk/whip` can publish.
+
+1. Open `/app` → **Stream-test** tab.
+2. Enable **Arm**.
+3. **Start loopback** — allow camera; local canvas shows QR overlay; received pane shows the WHEP stream (not “stream not found”).
+4. **Run latency sample** — table shows glass-to-glass p50/p95/p99 and decode hit count.
+5. **Snapshot getStats** — RTT / jitter / FPS / resolution rows appear.
+6. **Copy JSON** — clipboard has `when`, `mediaBase`, `tests`, `peerStats`, `logTail`.
+7. **Stop** or leave the tab — camera and WHIP/WHEP sessions tear down.
+
+Pass when:
+
+- Remote video plays with a visible QR in the corner.
+- Latency sample returns finite p50 (not all decode misses).
+- Leaving Stream-test releases the camera (browser indicator clears).
+
 ## Binary live frame (reference)
 
 Little-endian header: `op u8`, `flags u8` (bit0 = seq), `seq u16`.
@@ -126,4 +146,4 @@ Little-endian header: `op u8`, `flags u8` (bit0 = seq), `seq u16`.
 
 ## Not in these gates
 
-Paced WPM, Pi camera, Go `hidfwd`, public MediaMTX / WebRTC.
+Paced WPM, Pi camera publisher (use Gate 7 desk loopback instead), Go `hidfwd`, MediaMTX auth hardening / session-proxied WHEP.

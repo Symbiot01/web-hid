@@ -8,7 +8,7 @@ import {
   OP_RELEASE_ALL,
 } from '../lib/keymap';
 
-export type ConsoleViewName = 'focus' | 'split' | 'paste' | 'selftest';
+export type ConsoleViewName = 'focus' | 'split' | 'paste' | 'selftest' | 'streamtest';
 export type InputTarget = 'none' | 'hid' | 'measure';
 
 type UseLiveHidOpts = {
@@ -171,7 +171,7 @@ export function useLiveHid(opts: UseLiveHidOpts) {
 
   // Stop live when leaving operator views
   useEffect(() => {
-    if (view === 'paste' || view === 'selftest') {
+    if (view === 'paste' || view === 'selftest' || view === 'streamtest') {
       if (liveRef.current) stopLive('view switch');
       if (view === 'selftest') setInputTarget('measure');
       else setInputTarget('none');

@@ -4,12 +4,14 @@ import { useHidSocket } from '../hooks/useHidSocket';
 import { useLiveHid, type ConsoleViewName } from '../hooks/useLiveHid';
 import { PasteView } from './PasteView';
 import { SelfTestView } from './SelfTestView';
+import { StreamTestView } from './StreamTestView';
 
 const TABS: { id: ConsoleViewName; label: string }[] = [
   { id: 'focus', label: 'Focus' },
   { id: 'split', label: 'Split' },
   { id: 'paste', label: 'Paste' },
   { id: 'selftest', label: 'Self-test' },
+  { id: 'streamtest', label: 'Stream-test' },
 ];
 
 export function ConsoleView() {
@@ -295,6 +297,8 @@ export function ConsoleView() {
           active={view === 'selftest'}
         />
       ) : null}
+
+      {view === 'streamtest' ? <StreamTestView active={view === 'streamtest'} /> : null}
     </main>
   );
 }

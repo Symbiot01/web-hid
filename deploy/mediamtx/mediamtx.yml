@@ -39,3 +39,7 @@ paths:
   # Browser plays  → …/cam/whep
   # Test player    → …/cam
   cam:
+
+  # Browser Stream-test tab loopback (WHIP + WHEP). Keep separate from cam.
+  # Anyone who can reach /desk/whip can publish until auth is tightened.
+  desk:

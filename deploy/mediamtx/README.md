@@ -31,7 +31,9 @@ sudo rm -rf /data/coolify/applications/<resource-uuid>/mediamtx.yml
 
 Then redeploy.
 
-## URLs (path `cam`)
+## URLs
+
+### Path `cam` (Pi / production camera)
 
 | Role | URL |
 |---|---|
@@ -40,14 +42,26 @@ Then redeploy.
 | Browser play (WHEP) | `https://mediarelay…/cam/whep` |
 | RTSP debug | `rtsp://VPS_IP:8554/cam` |
 
+### Path `desk` (operator Stream-test loopback)
+
+| Role | URL |
+|---|---|
+| Built-in test page | `https://mediarelay…/desk` |
+| Browser publish (WHIP) | `https://mediarelay…/desk/whip` |
+| Browser play (WHEP) | `https://mediarelay…/desk/whep` |
+
+Used by the HID console **Stream-test** tab (`VITE_MEDIA_BASE_URL`). Keep `desk` separate from `cam` so desk tests never fight the Pi publisher.
+
+**Security:** until MediaMTX auth is tightened, anyone who can reach `/desk/whip` (or `/cam/whip`) can publish. Redeploy MediaMTX after changing `mediamtx.yml` (config is baked into the image).
+
 Exact paths follow [MediaMTX WebRTC docs](https://mediamtx.org/docs/).
 
 ## Smoke test
 
 1. Deploy; check container logs for listen on `:8889` / `:8189`.
-2. Publish a test stream (OBS WHIP or ffmpeg) to `/cam/whip`.
-3. Open `/cam` or WHEP in a browser from another network.
-4. Then point the Pi camera publisher at the WHIP URL.
+2. Publish a test stream (OBS WHIP or ffmpeg) to `/cam/whip`, **or** use console **Stream-test** against `/desk`.
+3. Open `/cam` (or `/desk`) / WHEP in a browser from another network.
+4. Then point the Pi camera publisher at the WHIP URL on `cam`.
 
 ## Auth
 
@@ -56,4 +70,5 @@ Current `mediamtx.yml` allows open publish/read for bring-up. Before production,
 ## Related
 
 - HID control plane: repo root `Dockerfile` / Coolify HID app  
-- Design: `docs/TECH_DESIGN.md` §6
+- Design: `docs/TECH_DESIGN.md` §6  
+- Debug / networking write-up (CV): `docs/MEDIAMTX_COOLIFY_CASESTUDY.md`
