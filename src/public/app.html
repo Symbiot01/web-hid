@@ -4,47 +4,107 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="robots" content="noindex, nofollow" />
-  <title>HID Relay — Console</title>
+  <title>Operator Console</title>
   <link rel="stylesheet" href="/css/app.css" />
 </head>
 <body>
   <main class="shell wide">
     <header class="topbar">
       <div>
-        <h1>HID Console</h1>
-        <p class="muted">Text is typed by the ESP32 as a USB keyboard. Payloads are never shown in logs.</p>
+        <h1>Operator Console</h1>
+        <p class="muted">
+          Live keys go to the ESP32 as a USB keyboard. Use a second PC as the target.
+          Camera feed is a placeholder until capture is wired.
+        </p>
       </div>
-      <button type="button" class="btn ghost" id="logout-btn">Logout</button>
+      <div class="topbar-actions">
+        <div class="status-row compact">
+          <span class="label">Device</span>
+          <span id="device-badge" class="badge offline" aria-live="polite">Disconnected</span>
+          <span id="ws-badge" class="badge muted-badge" aria-live="polite">WS…</span>
+          <span id="live-badge" class="badge muted-badge">Idle</span>
+        </div>
+        <button type="button" class="btn ghost" id="logout-btn">Logout</button>
+      </div>
     </header>
 
-    <section class="card">
-      <div class="status-row">
-        <span class="label">ESP32</span>
-        <span id="device-badge" class="badge offline" aria-live="polite">Disconnected</span>
-        <span id="ws-badge" class="badge muted-badge" aria-live="polite">WS connecting…</span>
-      </div>
+    <nav class="view-tabs" role="tablist" aria-label="Views">
+      <button type="button" class="tab active" data-view="focus" role="tab" aria-selected="true">Focus</button>
+      <button type="button" class="tab" data-view="split" role="tab" aria-selected="false">Split</button>
+      <button type="button" class="tab" data-view="paste" role="tab" aria-selected="false">Paste</button>
+    </nav>
 
-      <label class="field" for="payload">
-        <span>Text to type</span>
-        <textarea
-          id="payload"
-          rows="6"
-          maxlength="2000"
-          placeholder="Type text to send to the device…"
-          spellcheck="false"
-        ></textarea>
-      </label>
-      <div class="meta-row">
-        <span id="char-count" class="muted">0 / 2000</span>
-        <span id="last-action" class="muted" aria-live="polite"></span>
+    <!-- Focus: full-bleed placeholder video -->
+    <section id="view-focus" class="view active" data-view="focus">
+      <div class="video-stage" id="focus-stage" tabindex="0">
+        <div class="video-placeholder" aria-hidden="true">
+          <span>Camera placeholder</span>
+          <span class="muted">Click here, then Start live keys</span>
+        </div>
+        <div class="video-chrome">
+          <button type="button" class="btn primary" id="focus-live-start" disabled>Start live keys</button>
+          <button type="button" class="btn ghost" id="focus-live-stop" disabled>Stop</button>
+          <span id="focus-hint" class="hint muted"></span>
+        </div>
       </div>
+      <p id="focus-last" class="muted live-last">Last key: —</p>
+    </section>
 
-      <div class="actions">
-        <button type="button" class="btn primary" id="send-btn" disabled>Send</button>
-        <span class="hint muted">Enter to send · Shift+Enter for newline</span>
+    <!-- Split: video | scratch -->
+    <section id="view-split" class="view" data-view="split" hidden>
+      <div class="split-grid">
+        <div class="video-stage" id="split-stage" tabindex="0">
+          <div class="video-placeholder" aria-hidden="true">
+            <span>Camera placeholder</span>
+            <span class="muted">Focus this pane for HID</span>
+          </div>
+          <div class="video-chrome">
+            <button type="button" class="btn primary" id="split-live-start" disabled>Start live keys</button>
+            <button type="button" class="btn ghost" id="split-live-stop" disabled>Stop</button>
+          </div>
+        </div>
+        <div class="scratch-pane">
+          <label class="field" for="scratch">
+            <span>Local scratch (not sent to target)</span>
+            <textarea
+              id="scratch"
+              rows="16"
+              placeholder="Notes stay on this browser…"
+              spellcheck="false"
+            ></textarea>
+          </label>
+        </div>
       </div>
+      <p id="split-last" class="muted live-last">Last key: —</p>
+      <p id="split-hint" class="hint muted"></p>
+    </section>
+
+    <!-- Paste: dump send -->
+    <section id="view-paste" class="view" data-view="paste" hidden>
+      <section class="card">
+        <label class="field" for="paste-text">
+          <span>Dump paste (sent as text to the device)</span>
+          <textarea
+            id="paste-text"
+            rows="8"
+            maxlength="2000"
+            placeholder="Paste a block to type on the target…"
+            spellcheck="false"
+          ></textarea>
+        </label>
+        <div class="meta-row">
+          <span id="paste-count" class="muted">0 / 2000</span>
+          <span id="paste-status" class="muted" aria-live="polite"></span>
+        </div>
+        <div class="actions">
+          <button type="button" class="btn primary" id="paste-send" disabled>Send</button>
+          <span class="hint muted">Disabled while live keys are on</span>
+        </div>
+      </section>
     </section>
   </main>
+  <script src="/js/keymap.js" defer></script>
+  <script src="/js/hid-socket.js" defer></script>
   <script src="/js/app.js" defer></script>
 </body>
 </html>

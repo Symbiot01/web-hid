@@ -2,55 +2,35 @@
 
 (function () {
   const form = document.getElementById('login-form');
-  const passwordInput = document.getElementById('password');
+  const passwordEl = document.getElementById('password');
   const errorEl = document.getElementById('login-error');
   const btn = document.getElementById('login-btn');
 
-  function showError(message) {
-    errorEl.textContent = message;
-    errorEl.hidden = false;
-  }
-
-  function clearError() {
-    errorEl.hidden = true;
-    errorEl.textContent = '';
-  }
-
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    clearError();
+    errorEl.hidden = true;
+    errorEl.textContent = '';
     btn.disabled = true;
-
-    const password = passwordInput.value;
-
     try {
       const res = await fetch('/api/login', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         credentials: 'same-origin',
-        body: JSON.stringify({ password }),
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ password: passwordEl.value }),
       });
-
       if (!res.ok) {
-        let message = 'Invalid password';
-        try {
-          const data = await res.json();
-          if (data && typeof data.error === 'string') {
-            message = data.error;
-          }
-        } catch {
-          // keep default
-        }
-        showError(message);
-        passwordInput.focus();
-        passwordInput.select();
+        errorEl.textContent = 'Invalid password';
+        errorEl.hidden = false;
+        btn.disabled = false;
         return;
       }
-
       window.location.assign('/app');
     } catch {
-      showError('Unable to reach server');
-    } finally {
+      errorEl.textContent = 'Login failed';
+      errorEl.hidden = false;
       btn.disabled = false;
     }
   });

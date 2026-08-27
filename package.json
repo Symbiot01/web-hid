@@ -1,12 +1,12 @@
 {
-  "name": "hid-web-relay",
-  "version": "1.0.0",
-  "description": "Password-gated WebSocket HID relay for ESP32 keyboard bridge",
+  "name": "operator-console",
+  "version": "2.0.0",
+  "description": "Password-gated remote operator console: binary HID relay + dump paste",
   "private": true,
-  "main": "src/server.js",
+  "main": "src/index.js",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
   },
   "engines": {
     "node": ">=20"
