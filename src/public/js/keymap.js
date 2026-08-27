@@ -157,6 +157,7 @@
   const OP_KEY_DOWN = 1;
   const OP_KEY_UP = 2;
   const OP_RELEASE_ALL = 3;
+  const OP_MOUSE = 4;
 
   let seq = 0;
 
@@ -166,7 +167,7 @@
   }
 
   /**
-   * Build a live binary frame (little-endian).
+   * Build a keyboard or releaseAll live binary frame (little-endian).
    * @param {number} op
    * @param {number} [usage]
    * @returns {ArrayBuffer}
@@ -189,12 +190,57 @@
     return buf;
   }
 
+  /**
+   * Relative mouse frame: buttons u8, dx i16, dy i16, wheel i8. Total 10 bytes.
+   * @param {number} buttons
+   * @param {number} dx
+   * @param {number} dy
+   * @param {number} [wheel]
+   * @returns {ArrayBuffer}
+   */
+  function buildMouseFrame(buttons, dx, dy, wheel) {
+    const buf = new ArrayBuffer(10);
+    const view = new DataView(buf);
+    view.setUint8(0, OP_MOUSE);
+    view.setUint8(1, FLAG_SEQ);
+    view.setUint16(2, nextSeq(), true);
+    view.setUint8(4, buttons & 0x07);
+    view.setInt16(5, clampI16(dx), true);
+    view.setInt16(7, clampI16(dy), true);
+    view.setInt8(9, clampI8(wheel || 0));
+    return buf;
+  }
+
+  function clampI16(n) {
+    const v = Number(n) || 0;
+    if (v > 32767) {
+      return 32767;
+    }
+    if (v < -32768) {
+      return -32768;
+    }
+    return v | 0;
+  }
+
+  function clampI8(n) {
+    const v = Number(n) || 0;
+    if (v > 127) {
+      return 127;
+    }
+    if (v < -127) {
+      return -127;
+    }
+    return v | 0;
+  }
+
   global.HidKeymap = {
     hidUsageFromCode,
     isHidKeyboardUsage,
     buildFrame,
+    buildMouseFrame,
     OP_KEY_DOWN,
     OP_KEY_UP,
     OP_RELEASE_ALL,
+    OP_MOUSE,
   };
 })(window);

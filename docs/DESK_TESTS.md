@@ -50,7 +50,7 @@ Unplug Wi-Fi / kill power: badge → **Disconnected**.
 ## Gate 2 — Live keys on a second PC
 
 1. Focus Notepad (or any editor) on the **target**.
-2. On the operator: open `/app`, Focus view, click the camera placeholder, **Start live keys**.
+2. On the operator: open `/app`, Focus view, click the camera placeholder, **Start live**.
 3. Type `abc`, Shift, Enter, Backspace.
 4. **Stop**. Close the operator tab mid-key.
 
@@ -62,7 +62,7 @@ Pass when:
 
 ## Gate 3 — Dump paste
 
-1. Stop live keys.
+1. Stop live.
 2. Paste view: enter ~20 characters, **Send**.
 3. Check server log: a character **count** only (no paste body).
 
@@ -72,20 +72,36 @@ Pass when text appears on the target and live keys still work afterward.
 
 1. Split view: type in the scratch textarea while live is off → nothing on target.
 2. Start live, click the video placeholder, type → target receives keys.
-3. Click scratch while live → keys stay local (scratch).
+3. Click scratch while live → keys stay local (scratch); pointer unlocks.
 4. Switch Focus → Paste → Focus: each switch releases keys (`releaseAll`).
+
+## Gate 5 — Relative mouse
+
+**Flash firmware with mouse support first** (`USBHIDMouse`, op 4).
+
+1. Target: open a desktop or drawing app so cursor motion is visible.
+2. Operator: Focus view, **Start live** (pointer should lock).
+3. Move the mouse → target cursor moves.
+4. Left click; right click; scroll wheel.
+5. Esc (exit pointer lock) then Stop. Mid-drag: close the tab or switch to Paste.
+
+Pass when:
+
+- Cursor moves on the target (relative, not absolute).
+- Left click works; no stuck mouse buttons after Stop / Esc / tab close.
+- Keys still work in the same live session.
+- Scratch focus does not move the target mouse.
 
 ## Binary live frame (reference)
 
-Little-endian:
+Little-endian header: `op u8`, `flags u8` (bit0 = seq), `seq u16`.
 
-| Bytes | Field |
-|---|---|
-| 0 | `op` (1=down, 2=up, 3=releaseAll) |
-| 1 | `flags` (bit0 = seq present) |
-| 2–3 | `seq` u16 |
-| 4 | `usage` u8 (ops 1–2 only) |
+| op | Size | Payload |
+|---|---|---|
+| 1 / 2 | 5 | `usage` u8 |
+| 3 | 4 | releaseAll (keyboard + mouse) |
+| 4 | 10 | `buttons` u8, `dx` i16, `dy` i16, `wheel` i8 |
 
 ## Not in these gates
 
-Mouse, paced WPM, Pi camera, Go `hidfwd`, public TLS/MediaMTX.
+Paced WPM, Pi camera, Go `hidfwd`, public MediaMTX / WebRTC.

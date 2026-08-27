@@ -3,11 +3,13 @@
 const { WebSocket } = require('ws');
 
 const KEY_EVENTS_PER_SEC = 250;
+const MOUSE_EVENTS_PER_SEC = 250;
 const FLAG_SEQ = 0x01;
 
 const OP_KEY_DOWN = 1;
 const OP_KEY_UP = 2;
 const OP_RELEASE_ALL = 3;
+const OP_MOUSE = 4;
 
 /**
  * @param {number} usage
@@ -24,7 +26,7 @@ function isHidKeyboardUsage(usage) {
 }
 
 /**
- * Expected total frame length for a keyboard-only live op.
+ * Expected total frame length for a live op.
  * @param {number} op
  * @returns {number|null}
  */
@@ -34,6 +36,9 @@ function expectedFrameLength(op) {
   }
   if (op === OP_RELEASE_ALL) {
     return 4;
+  }
+  if (op === OP_MOUSE) {
+    return 10; // header 4 + buttons + dx i16 + dy i16 + wheel i8
   }
   return null;
 }
@@ -225,9 +230,11 @@ module.exports = {
   Forwarder,
   createRateGate,
   KEY_EVENTS_PER_SEC,
+  MOUSE_EVENTS_PER_SEC,
   OP_KEY_DOWN,
   OP_KEY_UP,
   OP_RELEASE_ALL,
+  OP_MOUSE,
   FLAG_SEQ,
   isHidKeyboardUsage,
 };

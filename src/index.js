@@ -10,7 +10,7 @@ const {
   isAllowedOrigin,
   verifyPassword,
 } = require('./auth');
-const { Forwarder, createRateGate, KEY_EVENTS_PER_SEC } = require('./forward');
+const { Forwarder, createRateGate, KEY_EVENTS_PER_SEC, MOUSE_EVENTS_PER_SEC, OP_MOUSE } = require('./forward');
 const { createApp } = require('./http');
 
 const config = loadConfig();
@@ -77,7 +77,8 @@ wssDevice.on('connection', (ws) => {
 
 wssHid.on('connection', (ws) => {
   forwarder.addUiClient(ws);
-  const allowFrame = createRateGate(KEY_EVENTS_PER_SEC);
+  const allowKey = createRateGate(KEY_EVENTS_PER_SEC);
+  const allowMouse = createRateGate(MOUSE_EVENTS_PER_SEC);
 
   // One status JSON on connect so the badge updates before first key
   forwarder.sendUiStatus(ws);
@@ -99,9 +100,11 @@ wssHid.on('connection', (ws) => {
     }
 
     const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
-    if (!allowFrame()) {
+    const op = buf.length > 0 ? buf[0] : 0;
+    const allow = op === OP_MOUSE ? allowMouse : allowKey;
+    if (!allow()) {
       if (ws.readyState === 1) {
-        ws.send(JSON.stringify({ type: 'error', message: 'Too many key events' }));
+        ws.send(JSON.stringify({ type: 'error', message: 'Too many input events' }));
       }
       return;
     }

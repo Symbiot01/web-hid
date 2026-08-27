@@ -13,7 +13,7 @@
       <div>
         <h1>Operator Console</h1>
         <p class="muted">
-          Live keys go to the ESP32 as a USB keyboard. Use a second PC as the target.
+          Live keys and relative mouse go to the ESP32 over USB HID.
           Camera feed is a placeholder until capture is wired.
         </p>
       </div>
@@ -39,10 +39,10 @@
       <div class="video-stage" id="focus-stage" tabindex="0">
         <div class="video-placeholder" aria-hidden="true">
           <span>Camera placeholder</span>
-          <span class="muted">Click here, then Start live keys</span>
+          <span class="muted">Click here, then Start live (keys + mouse)</span>
         </div>
         <div class="video-chrome">
-          <button type="button" class="btn primary" id="focus-live-start" disabled>Start live keys</button>
+          <button type="button" class="btn primary" id="focus-live-start" disabled>Start live</button>
           <button type="button" class="btn ghost" id="focus-live-stop" disabled>Stop</button>
           <span id="focus-hint" class="hint muted"></span>
         </div>
@@ -56,10 +56,10 @@
         <div class="video-stage" id="split-stage" tabindex="0">
           <div class="video-placeholder" aria-hidden="true">
             <span>Camera placeholder</span>
-            <span class="muted">Focus this pane for HID</span>
+            <span class="muted">Focus this pane for keys + mouse</span>
           </div>
           <div class="video-chrome">
-            <button type="button" class="btn primary" id="split-live-start" disabled>Start live keys</button>
+            <button type="button" class="btn primary" id="split-live-start" disabled>Start live</button>
             <button type="button" class="btn ghost" id="split-live-stop" disabled>Stop</button>
           </div>
         </div>

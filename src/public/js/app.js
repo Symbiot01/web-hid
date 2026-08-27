@@ -29,9 +29,16 @@
   let inputTarget = 'none';
   let currentView = 'focus';
   const heldCodes = new Set();
+  let mouseButtons = 0;
 
-  const { hidUsageFromCode, buildFrame, OP_KEY_DOWN, OP_KEY_UP, OP_RELEASE_ALL } =
-    window.HidKeymap;
+  const {
+    hidUsageFromCode,
+    buildFrame,
+    buildMouseFrame,
+    OP_KEY_DOWN,
+    OP_KEY_UP,
+    OP_RELEASE_ALL,
+  } = window.HidKeymap;
 
   function setDeviceStatus(connected) {
     deviceConnected = Boolean(connected);
@@ -71,25 +78,34 @@
 
   function sendReleaseAll() {
     heldCodes.clear();
+    mouseButtons = 0;
     socket.sendBinary(buildFrame(OP_RELEASE_ALL));
   }
 
+  function activeStage() {
+    return currentView === 'split' ? splitStage : focusStage;
+  }
+
+  function hintEl() {
+    return currentView === 'split' ? splitHint : focusHint;
+  }
+
   async function lockKeyboard() {
-    const hintEl = currentView === 'split' ? splitHint : focusHint;
-    hintEl.textContent = '';
+    const el = hintEl();
+    el.textContent = '';
     if (!window.isSecureContext) {
-      hintEl.textContent =
+      el.textContent =
         'Keyboard Lock needs HTTPS or localhost. Some browser shortcuts stay local.';
       return;
     }
     if (!navigator.keyboard || typeof navigator.keyboard.lock !== 'function') {
-      hintEl.textContent = 'No Keyboard Lock in this browser. Use Chromium when possible.';
+      el.textContent = 'No Keyboard Lock in this browser. Use Chromium when possible.';
       return;
     }
     try {
       await navigator.keyboard.lock();
     } catch {
-      hintEl.textContent = 'Keyboard Lock denied. Some shortcuts may not forward.';
+      el.textContent = 'Keyboard Lock denied. Some shortcuts may not forward.';
     }
   }
 
@@ -103,6 +119,76 @@
     }
   }
 
+  function requestPointerLockOnStage() {
+    const stage = activeStage();
+    if (!stage || document.pointerLockElement === stage) {
+      return;
+    }
+    if (typeof stage.requestPointerLock !== 'function') {
+      hintEl().textContent = 'Pointer Lock unavailable. Mouse needs a Chromium browser.';
+      return;
+    }
+    try {
+      const ret = stage.requestPointerLock({ unadjustedMovement: true });
+      if (ret && typeof ret.then === 'function') {
+        ret.catch(() => {
+          try {
+            stage.requestPointerLock();
+          } catch {
+            // ignore
+          }
+        });
+      }
+    } catch {
+      try {
+        stage.requestPointerLock();
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  function exitPointerLock() {
+    if (document.pointerLockElement && typeof document.exitPointerLock === 'function') {
+      try {
+        document.exitPointerLock();
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  function canSendMouse() {
+    return liveActive && inputTarget === 'hid' && currentView !== 'paste';
+  }
+
+  function sendMouse(dx, dy, wheel, buttons) {
+    if (!canSendMouse()) {
+      return;
+    }
+    mouseButtons = buttons & 0x07;
+    socket.sendBinary(buildMouseFrame(mouseButtons, dx, dy, wheel));
+  }
+
+  function wheelDelta(event) {
+    let steps = 0;
+    if (event.deltaMode === 1) {
+      steps = -event.deltaY;
+    } else if (event.deltaMode === 2) {
+      steps = -event.deltaY * 3;
+    } else {
+      steps = -event.deltaY / 40;
+    }
+    const n = Math.round(steps);
+    if (n > 127) {
+      return 127;
+    }
+    if (n < -127) {
+      return -127;
+    }
+    return n;
+  }
+
   async function startLive() {
     if (!deviceConnected || !socket.isOpen() || liveActive || currentView === 'paste') {
       return;
@@ -114,14 +200,19 @@
     refreshButtons();
     setLastKey('Last key: (live on)');
     sendReleaseAll();
-    await lockKeyboard();
-    const stage = currentView === 'split' ? splitStage : focusStage;
+    const stage = activeStage();
     stage.focus();
+    // Must request lock in the same user-gesture turn (before await).
+    requestPointerLockOnStage();
+    await lockKeyboard();
+    hintEl().textContent =
+      'Pointer locked — Esc exits lock. Move/click/scroll for target mouse.';
   }
 
   function stopLive(reason) {
     if (!liveActive) {
       unlockKeyboard();
+      exitPointerLock();
       refreshButtons();
       return;
     }
@@ -130,8 +221,10 @@
     setLiveBadge(false);
     markVideoFocus(false);
     unlockKeyboard();
+    exitPointerLock();
     sendReleaseAll();
     refreshButtons();
+    hintEl().textContent = '';
     setLastKey(reason ? `Last key: (${reason})` : 'Last key: —');
   }
 
@@ -279,22 +372,29 @@
   splitLiveStop.addEventListener('click', () => stopLive('Live keys off'));
 
   focusStage.addEventListener('click', () => {
-    inputTarget = liveActive ? 'hid' : 'none';
-    markVideoFocus(liveActive);
-    focusStage.focus();
+    if (liveActive) {
+      inputTarget = 'hid';
+      markVideoFocus(true);
+      focusStage.focus();
+      requestPointerLockOnStage();
+    }
   });
 
   splitStage.addEventListener('click', () => {
-    inputTarget = liveActive ? 'hid' : 'none';
-    markVideoFocus(liveActive);
-    splitStage.focus();
+    if (liveActive) {
+      inputTarget = 'hid';
+      markVideoFocus(true);
+      splitStage.focus();
+      requestPointerLockOnStage();
+    }
   });
 
   scratch.addEventListener('focus', () => {
     if (liveActive) {
-      // Scratch focus: stop stealing keys to target
       inputTarget = 'scratch';
       markVideoFocus(false);
+      exitPointerLock();
+      sendReleaseAll();
     }
   });
 
@@ -305,6 +405,71 @@
     }
   });
 
+  function onMouseMove(event) {
+    if (!canSendMouse() || document.pointerLockElement !== activeStage()) {
+      return;
+    }
+    const dx = event.movementX || 0;
+    const dy = event.movementY || 0;
+    if (dx === 0 && dy === 0) {
+      return;
+    }
+    sendMouse(dx, dy, 0, event.buttons);
+  }
+
+  function onMouseButton(event) {
+    if (!canSendMouse() || document.pointerLockElement !== activeStage()) {
+      return;
+    }
+    event.preventDefault();
+    sendMouse(0, 0, 0, event.buttons);
+    setLastKey(`Last key: mouse buttons ${event.buttons}`);
+  }
+
+  function onWheel(event) {
+    if (!canSendMouse() || document.pointerLockElement !== activeStage()) {
+      return;
+    }
+    event.preventDefault();
+    const w = wheelDelta(event);
+    if (w === 0) {
+      return;
+    }
+    sendMouse(0, 0, w, event.buttons);
+  }
+
+  function onContextMenu(event) {
+    if (canSendMouse() && document.pointerLockElement === activeStage()) {
+      event.preventDefault();
+    }
+  }
+
+  document.addEventListener('pointerlockchange', () => {
+    if (!liveActive) {
+      return;
+    }
+    if (document.pointerLockElement === activeStage()) {
+      inputTarget = 'hid';
+      markVideoFocus(true);
+      hintEl().textContent =
+        'Pointer locked — Esc exits lock. Move/click/scroll for target mouse.';
+    } else if (inputTarget === 'hid') {
+      hintEl().textContent = 'Click the video stage to re-lock the pointer.';
+      sendReleaseAll();
+    }
+  });
+
+  focusStage.addEventListener('mousemove', onMouseMove);
+  splitStage.addEventListener('mousemove', onMouseMove);
+  focusStage.addEventListener('mousedown', onMouseButton);
+  splitStage.addEventListener('mousedown', onMouseButton);
+  focusStage.addEventListener('mouseup', onMouseButton);
+  splitStage.addEventListener('mouseup', onMouseButton);
+  focusStage.addEventListener('wheel', onWheel, { passive: false });
+  splitStage.addEventListener('wheel', onWheel, { passive: false });
+  focusStage.addEventListener('contextmenu', onContextMenu);
+  splitStage.addEventListener('contextmenu', onContextMenu);
+
   pasteText.addEventListener('input', updatePasteCount);
   pasteSend.addEventListener('click', sendPaste);
 
@@ -313,6 +478,7 @@
 
   window.addEventListener('blur', () => {
     if (liveActive) {
+      exitPointerLock();
       sendReleaseAll();
       setLastKey('Last key: (window blur — keys released)');
     }
@@ -320,6 +486,7 @@
 
   document.addEventListener('visibilitychange', () => {
     if (document.hidden && liveActive) {
+      exitPointerLock();
       sendReleaseAll();
     }
   });
