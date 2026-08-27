@@ -11,15 +11,21 @@ const {
   verifyPassword,
 } = require('./auth');
 const { Forwarder, createRateGate, KEY_EVENTS_PER_SEC, MOUSE_EVENTS_PER_SEC, OP_MOUSE } = require('./forward');
+const { CaptureHub } = require('./captureHub');
 const { createApp } = require('./http');
 
 const config = loadConfig();
 const forwarder = new Forwarder();
-const app = createApp({ config, forwarder });
+const captureHub = new CaptureHub();
+const app = createApp({ config, forwarder, captureHub });
 const server = http.createServer(app);
 
 const wssHid = new WebSocketServer({ noServer: true, maxPayload: 64 });
 const wssDevice = new WebSocketServer({ noServer: true, maxPayload: 2048 });
+const wssCapture = new WebSocketServer({
+  noServer: true,
+  maxPayload: 8 * 1024 * 1024,
+});
 
 server.on('upgrade', (req, socket, head) => {
   const parsed = url.parse(req.url || '', true);
@@ -55,6 +61,24 @@ server.on('upgrade', (req, socket, head) => {
     return;
   }
 
+  if (pathname === '/ws/capture') {
+    if (!config.captureToken) {
+      socket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    const token = typeof parsed.query.token === 'string' ? parsed.query.token : '';
+    if (!verifyPassword(token, config.captureToken)) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    wssCapture.handleUpgrade(req, socket, head, (ws) => {
+      wssCapture.emit('connection', ws, req);
+    });
+    return;
+  }
+
   socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
   socket.destroy();
 });
@@ -73,6 +97,10 @@ wssDevice.on('connection', (ws) => {
   ws.on('error', () => {
     forwarder.clearDevice(ws);
   });
+});
+
+wssCapture.on('connection', (ws) => {
+  captureHub.setSocket(ws);
 });
 
 wssHid.on('connection', (ws) => {
@@ -133,6 +161,7 @@ server.listen(config.port, config.host, () => {
   console.log(` Operator console on ${config.host}:${config.port}`);
   console.log(` NODE_ENV=${config.nodeEnv}`);
   console.log(' DEVICE_TOKEN required for /ws/device');
+  console.log(' CAPTURE_TOKEN required for /ws/capture');
   console.log('==============================================');
 });
 

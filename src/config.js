@@ -32,6 +32,7 @@ function parseHttpsOrigin(raw) {
  *   mediaBaseUrl: string,
  *   mediaOrigin: string,
  *   stunUrl: string,
+ *   captureToken: string,
  * }}
  */
 function loadConfig() {
@@ -68,6 +69,17 @@ function loadConfig() {
   const mediaBaseUrl = mediaRaw.replace(/\/+$/, '');
   const stunUrl = (process.env.MEDIA_STUN_URL || DEFAULT_STUN_URL).trim();
 
+  const captureToken = (process.env.CAPTURE_TOKEN || '').trim();
+  if (captureToken && Buffer.byteLength(captureToken, 'utf8') < 16) {
+    console.error('[fatal] CAPTURE_TOKEN must be at least 16 characters when set');
+    process.exit(1);
+  }
+  if (!captureToken) {
+    console.warn(
+      '[warn] CAPTURE_TOKEN unset — /ws/capture and POST /api/photo unavailable'
+    );
+  }
+
   return {
     gatePassword,
     sessionSecret,
@@ -79,6 +91,7 @@ function loadConfig() {
     mediaBaseUrl,
     mediaOrigin,
     stunUrl,
+    captureToken,
   };
 }
 

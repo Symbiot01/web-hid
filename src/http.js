@@ -14,15 +14,17 @@ const {
   requireSession,
   PASTE_MAX_CHARS,
 } = require('./auth');
+const { fetchStillJpeg } = require('./photo');
 
 /**
  * @param {{
  *   config: ReturnType<typeof import('./config').loadConfig>,
  *   forwarder: import('./forward').Forwarder,
+ *   captureHub: import('./captureHub').CaptureHub,
  * }} opts
  */
 function createApp(opts) {
-  const { config, forwarder } = opts;
+  const { config, forwarder, captureHub } = opts;
   const publicDir = path.join(__dirname, 'public');
   const indexHtml = path.join(publicDir, 'index.html');
   const app = express();
@@ -39,7 +41,7 @@ function createApp(opts) {
           'default-src': ["'self'"],
           'script-src': ["'self'"],
           'style-src': ["'self'"],
-          'img-src': ["'self'", 'data:'],
+          'img-src': ["'self'", 'data:', 'blob:'],
           // Stream-test WHIP/WHEP fetch + STUN for ICE (media plane is separate host).
           'connect-src': ["'self'", config.mediaOrigin, config.stunUrl],
           'media-src': ["'self'", 'blob:', 'mediastream:'],
@@ -89,7 +91,10 @@ function createApp(opts) {
   });
 
   app.get('/api/status', requireSession(config.sessionSecret), (_req, res) => {
-    res.json({ deviceConnected: forwarder.isDeviceConnected() });
+    res.json({
+      deviceConnected: forwarder.isDeviceConnected(),
+      captureConnected: captureHub.isConnected(),
+    });
   });
 
   app.post('/api/paste', requireSession(config.sessionSecret), (req, res) => {
@@ -106,6 +111,41 @@ function createApp(opts) {
     }
     return res.status(200).json({ ok: true, chars: result.chars });
   });
+
+  // Slice E — session → Pi via /ws/capture (CAPTURE_TOKEN never leaves the server).
+  const photoLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Rate limited' },
+  });
+
+  app.post(
+    '/api/photo',
+    requireSession(config.sessionSecret),
+    photoLimiter,
+    async (_req, res) => {
+      try {
+        const result = await fetchStillJpeg(captureHub, {
+          captureToken: config.captureToken,
+        });
+        if (!result.ok) {
+          return res.status(result.status).json({ error: result.error });
+        }
+        res.setHeader('Content-Type', 'image/jpeg');
+        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${result.filename}"`
+        );
+        res.setHeader('Content-Length', String(result.body.length));
+        return res.status(200).send(result.body);
+      } catch {
+        return res.status(500).json({ error: 'Photo failed' });
+      }
+    }
+  );
 
   app.get('/app', requireSession(config.sessionSecret), (_req, res) => {
     res.sendFile(indexHtml);
