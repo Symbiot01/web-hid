@@ -142,7 +142,18 @@ function isAllowedOrigin(req, nodeEnv) {
     if (!hostHeader) {
       return false;
     }
-    return o.host === hostHeader;
+    if (o.host === hostHeader) {
+      return true;
+    }
+    // Vite dev proxy (npm run dev): browser Origin is :5173, backend Host is :8080
+    if (nodeEnv !== 'production') {
+      const viteDev =
+        (o.hostname === 'localhost' || o.hostname === '127.0.0.1') && o.port === '5173';
+      if (viteDev) {
+        return true;
+      }
+    }
+    return false;
   } catch {
     return false;
   }

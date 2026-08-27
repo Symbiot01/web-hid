@@ -24,6 +24,7 @@ const {
 function createApp(opts) {
   const { config, forwarder } = opts;
   const publicDir = path.join(__dirname, 'public');
+  const indexHtml = path.join(publicDir, 'index.html');
   const app = express();
 
   if (config.trustProxy) {
@@ -105,18 +106,24 @@ function createApp(opts) {
   });
 
   app.get('/app', requireSession(config.sessionSecret), (_req, res) => {
-    res.sendFile(path.join(publicDir, 'app.html'));
+    res.sendFile(indexHtml);
   });
-
-  app.use('/css', express.static(path.join(publicDir, 'css'), { maxAge: '1h' }));
-  app.use('/js', express.static(path.join(publicDir, 'js'), { maxAge: '1h' }));
 
   app.get('/', (req, res) => {
     if (sessionFromCookieHeader(req.headers.cookie, config.sessionSecret)) {
       return res.redirect('/app');
     }
-    return res.sendFile(path.join(publicDir, 'login.html'));
+    return res.sendFile(indexHtml);
   });
+
+  // Vite build assets (hashed JS/CSS under /assets)
+  app.use(
+    express.static(publicDir, {
+      maxAge: '1h',
+      index: false,
+      fallthrough: true,
+    })
+  );
 
   app.use((_req, res) => {
     res.status(404).json({ error: 'Not found' });

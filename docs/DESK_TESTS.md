@@ -9,6 +9,7 @@ cd HID
 cp .env.example .env   # if needed
 # GATE_PASSWORD ≥16, SESSION_SECRET ≥32, DEVICE_TOKEN ≥16
 npm install
+npm run build
 npm start
 ```
 

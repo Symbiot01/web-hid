@@ -1,3 +1,12 @@
+# syntax=docker/dockerfile:1
+
+FROM node:20-alpine AS web-build
+WORKDIR /app/web
+COPY web/package.json web/package-lock.json* ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
 FROM node:20-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
@@ -13,6 +22,7 @@ RUN addgroup -S app && adduser -S -G app app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
 COPY src ./src
+COPY --from=web-build /app/src/public ./src/public
 
 USER app
 EXPOSE 3000
