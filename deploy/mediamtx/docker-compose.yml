@@ -1,6 +1,7 @@
 services:
   mediamtx:
-    image: bluenviron/mediamtx:1
+    build: .
+    image: web-hid-mediamtx:local
     restart: unless-stopped
     ports:
       # WHIP / WHEP / built-in player (TCP). Point Coolify HTTPS domain here.
@@ -9,11 +10,7 @@ services:
       - "8189:8189/udp"
       # Optional LAN/debug RTSP (prefer closed on public firewall).
       - "8554:8554"
-    volumes:
-      - ./mediamtx.yml:/mediamtx.yml:ro
     environment:
       # Set in Coolify to your public hostname and/or VPS public IP (comma-separated).
-      # Example: media.yourdomain.com,203.0.113.10
+      # Example: mediarelay.sahilpatel.online,34.42.4.172
       MTX_WEBRTCADDITIONALHOSTS: ${MTX_WEBRTCADDITIONALHOSTS:-}
-    # Uncomment if Coolify UDP mapping is unreliable and you can use host networking:
-    # network_mode: host
