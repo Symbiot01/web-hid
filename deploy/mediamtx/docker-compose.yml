@@ -1,0 +1,19 @@
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1
+    restart: unless-stopped
+    ports:
+      # WHIP / WHEP / built-in player (TCP). Point Coolify HTTPS domain here.
+      - "8889:8889"
+      # WebRTC media (UDP). Must be open on the VPS firewall.
+      - "8189:8189/udp"
+      # Optional LAN/debug RTSP (prefer closed on public firewall).
+      - "8554:8554"
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    environment:
+      # Set in Coolify to your public hostname and/or VPS public IP (comma-separated).
+      # Example: media.yourdomain.com,203.0.113.10
+      MTX_WEBRTCADDITIONALHOSTS: ${MTX_WEBRTCADDITIONALHOSTS:-}
+    # Uncomment if Coolify UDP mapping is unreliable and you can use host networking:
+    # network_mode: host
