@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
+import { useCamWhep } from '../hooks/useCamWhep';
 import { useHidSocket } from '../hooks/useHidSocket';
 import { useLiveHid, type ConsoleViewName } from '../hooks/useLiveHid';
 import { fetchPhoto } from '../lib/fetchPhoto';
@@ -22,6 +23,7 @@ export function ConsoleView() {
   const [view, setView] = useState<ConsoleViewName>('focus');
   const stageRef = useRef<HTMLDivElement>(null);
   const scratchRef = useRef<HTMLTextAreaElement>(null);
+  const camVideoRef = useRef<HTMLVideoElement>(null);
 
   const {
     wsConnected,
@@ -42,6 +44,15 @@ export function ConsoleView() {
     stageRef,
     scratchRef,
   });
+
+  const camActive = view === 'focus' || view === 'split';
+  const cam = useCamWhep(camActive, camVideoRef);
+
+  useEffect(() => {
+    if (camActive) {
+      cam.syncVideo();
+    }
+  }, [view, camActive, cam.status, cam.syncVideo]);
 
   const [photoBusy, setPhotoBusy] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
@@ -129,10 +140,21 @@ export function ConsoleView() {
 
   const canSnapshot = captureConnected && !photoBusy;
 
-  function snapshotChrome() {
+  function videoChromeExtras() {
     return (
       <>
         <span className="chrome-sep" aria-hidden="true" />
+        <button
+          type="button"
+          className="btn ghost"
+          title="Reconnect MediaMTX /cam WHEP"
+          onClick={(e) => {
+            e.stopPropagation();
+            cam.reconnect();
+          }}
+        >
+          Reconnect video
+        </button>
         <button
           type="button"
           className="btn ghost"
@@ -220,14 +242,62 @@ export function ConsoleView() {
     );
   }
 
+  function stageBody(hint: string) {
+    return (
+      <>
+        <video
+          ref={camVideoRef}
+          className="cam-video"
+          playsInline
+          muted
+          autoPlay
+        />
+        {cam.status !== 'live' ? (
+          <div className="video-placeholder cam-overlay" aria-hidden="true">
+            <span>{cam.status === 'connecting' ? 'Connecting to /cam…' : 'No live video'}</span>
+            <span className="muted">{hint}</span>
+          </div>
+        ) : null}
+        <div className="video-chrome">
+          <button
+            type="button"
+            className="btn primary"
+            disabled={!live.canLive}
+            onClick={(e) => {
+              e.stopPropagation();
+              void live.startLive();
+            }}
+          >
+            Start live
+          </button>
+          <button
+            type="button"
+            className="btn ghost"
+            disabled={!live.liveActive}
+            onClick={(e) => {
+              e.stopPropagation();
+              live.stopLive('Live keys off');
+            }}
+          >
+            Stop
+          </button>
+          {videoChromeExtras()}
+          {mouseChrome()}
+          <span className="hint muted">{cam.videoLabel}</span>
+          <span className="hint muted">{live.hint}</span>
+        </div>
+      </>
+    );
+  }
+
   return (
     <main className="shell wide">
       <header className="topbar">
         <div>
           <h1>Operator Console</h1>
           <p className="muted">
-            Live keys and mouse go to the ESP32. Snapshot pulls a still from the Pi over
-            capture WS. Live camera pane is still a placeholder until Focus WHEP.
+            Live video is MediaMTX <code>/cam</code> (WHEP). Keys/mouse go to the ESP32.
+            Snapshot stills use capture WS (briefly pauses SRT on the Pi).
           </p>
         </div>
         <div className="topbar-actions">
@@ -246,11 +316,28 @@ export function ConsoleView() {
             >
               {captureConnected ? 'Online' : 'Offline'}
             </span>
+            <span className="label">Video</span>
+            <span
+              className={`badge ${
+                cam.status === 'live'
+                  ? 'online'
+                  : cam.status === 'connecting'
+                    ? 'live'
+                    : 'offline'
+              }`}
+              aria-live="polite"
+            >
+              {cam.status === 'live'
+                ? 'Live'
+                : cam.status === 'connecting'
+                  ? 'Connecting'
+                  : 'Off'}
+            </span>
             <span className={`badge ${wsConnected ? 'online' : 'muted-badge'}`} aria-live="polite">
               {wsConnected ? 'WS connected' : 'WS disconnected'}
             </span>
             <span className={`badge ${live.liveActive ? 'live' : 'muted-badge'}`}>
-              {live.liveActive ? 'Live' : 'Idle'}
+              {live.liveActive ? 'HID live' : 'HID idle'}
             </span>
           </div>
           <button type="button" className="btn ghost" onClick={() => void logout()}>
@@ -282,37 +369,7 @@ export function ConsoleView() {
             tabIndex={0}
             onClick={live.onStageClick}
           >
-            <div className="video-placeholder" aria-hidden="true">
-              <span>Camera placeholder</span>
-              <span className="muted">Click here, then Start live (keys + mouse)</span>
-            </div>
-            <div className="video-chrome">
-              <button
-                type="button"
-                className="btn primary"
-                disabled={!live.canLive}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void live.startLive();
-                }}
-              >
-                Start live
-              </button>
-              <button
-                type="button"
-                className="btn ghost"
-                disabled={!live.liveActive}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  live.stopLive('Live keys off');
-                }}
-              >
-                Stop
-              </button>
-              {snapshotChrome()}
-              {mouseChrome()}
-              <span className="hint muted">{live.hint}</span>
-            </div>
+            {stageBody('Click stage, then Start live (keys + mouse)')}
           </div>
           <p className="muted live-last">{photoError || live.lastKey}</p>
         </section>
@@ -327,36 +384,7 @@ export function ConsoleView() {
               tabIndex={0}
               onClick={live.onStageClick}
             >
-              <div className="video-placeholder" aria-hidden="true">
-                <span>Camera placeholder</span>
-                <span className="muted">Focus this pane for keys + mouse</span>
-              </div>
-              <div className="video-chrome">
-                <button
-                  type="button"
-                  className="btn primary"
-                  disabled={!live.canLive}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void live.startLive();
-                  }}
-                >
-                  Start live
-                </button>
-                <button
-                  type="button"
-                  className="btn ghost"
-                  disabled={!live.liveActive}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    live.stopLive('Live keys off');
-                  }}
-                >
-                  Stop
-                </button>
-                {snapshotChrome()}
-                {mouseChrome()}
-              </div>
+              {stageBody('Focus this pane for keys + mouse')}
             </div>
             <div className="scratch-pane">
               <label className="field" htmlFor="scratch">

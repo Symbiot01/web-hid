@@ -235,7 +235,27 @@ textarea:focus,
   user-select: none;
 }
 
+.cam-video {
+  flex: 1;
+  width: 100%;
+  min-height: 280px;
+  object-fit: contain;
+  background: #010409;
+  pointer-events: none;
+}
+
+.video-placeholder.cam-overlay {
+  position: absolute;
+  inset: 0 0 auto 0;
+  bottom: 3.5rem;
+  z-index: 1;
+  pointer-events: none;
+  background: transparent;
+}
+
 .video-chrome {
+  position: relative;
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 0.6rem;

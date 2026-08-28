@@ -1,5 +1,8 @@
 const DEFAULT_MEDIA_BASE = 'https://mediarelay.sahilpatel.online';
-const PATH = 'desk';
+/** Stream-test loopback path (browser WHIP + WHEP). */
+const DESK_PATH = 'desk';
+/** Pi live camera path (SRT in → WHEP out). */
+const CAM_PATH = 'cam';
 
 function trimSlash(s: string): string {
   return s.replace(/\/+$/, '');
@@ -12,16 +15,29 @@ export function mediaBaseUrl(): string {
   return trimSlash(base);
 }
 
+/** @deprecated Prefer mediaDeskPath — kept for Stream-test call sites. */
 export function mediaPath(): string {
-  return PATH;
+  return DESK_PATH;
+}
+
+export function mediaDeskPath(): string {
+  return DESK_PATH;
+}
+
+export function camPath(): string {
+  return CAM_PATH;
 }
 
 export function whipUrl(): string {
-  return `${mediaBaseUrl()}/${PATH}/whip`;
+  return `${mediaBaseUrl()}/${DESK_PATH}/whip`;
 }
 
 export function whepUrl(): string {
-  return `${mediaBaseUrl()}/${PATH}/whep`;
+  return `${mediaBaseUrl()}/${DESK_PATH}/whep`;
+}
+
+export function camWhepUrl(): string {
+  return `${mediaBaseUrl()}/${CAM_PATH}/whep`;
 }
 
 export const DEFAULT_ICE_SERVERS: RTCIceServer[] = [

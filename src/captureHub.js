@@ -3,7 +3,7 @@
 const crypto = require('crypto');
 const { WebSocket } = require('ws');
 
-const PHOTO_TIMEOUT_MS = 5000;
+const PHOTO_TIMEOUT_MS = 20000;
 const PHOTO_MIN_INTERVAL_MS = 2000;
 const MAX_JPEG_BYTES = 8 * 1024 * 1024;
 
