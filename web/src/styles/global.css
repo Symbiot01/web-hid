@@ -90,6 +90,7 @@ body {
 }
 
 input[type='password'],
+input[type='text'],
 textarea {
   width: 100%;
   background: var(--bg);
@@ -99,6 +100,22 @@ textarea {
   padding: 0.65rem 0.75rem;
   font: inherit;
   resize: vertical;
+}
+
+.password-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.password-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.password-toggle {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 input:focus,

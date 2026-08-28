@@ -4,6 +4,7 @@ import { useState, type FormEvent } from 'react';
 export function LoginView() {
   const navigate = useNavigate();
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -46,17 +47,28 @@ export function LoginView() {
         <form className="login-form" onSubmit={onSubmit} autoComplete="current-password">
           <label className="field" htmlFor="password">
             <span>Password</span>
-            <input
-              id="password"
-              name="password"
-              type="password"
-              required
-              minLength={16}
-              autoComplete="current-password"
-              spellCheck={false}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
+            <div className="password-row">
+              <input
+                id="password"
+                name="password"
+                type={showPassword ? 'text' : 'password'}
+                required
+                minLength={16}
+                autoComplete="current-password"
+                spellCheck={false}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+              <button
+                type="button"
+                className="btn ghost password-toggle"
+                aria-pressed={showPassword}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                onClick={() => setShowPassword((v) => !v)}
+              >
+                {showPassword ? 'Hide' : 'Show'}
+              </button>
+            </div>
           </label>
           {error ? (
             <p className="error" role="alert">
