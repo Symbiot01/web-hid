@@ -93,6 +93,7 @@ input[type='password'],
 input[type='text'],
 textarea {
   width: 100%;
+  box-sizing: border-box;
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--border);
@@ -102,20 +103,44 @@ textarea {
   resize: vertical;
 }
 
-.password-row {
-  display: flex;
-  gap: 0.5rem;
-  align-items: stretch;
+/* Toggle sits inside the field so the input stays full-width. */
+.password-field {
+  position: relative;
+  width: 100%;
 }
 
-.password-row input {
-  flex: 1;
-  min-width: 0;
+.password-field__input {
+  width: 100%;
+  box-sizing: border-box;
+  padding-right: 4.25rem;
 }
 
-.password-toggle {
-  flex-shrink: 0;
+.password-field__toggle {
+  position: absolute;
+  top: 50%;
+  right: 0.35rem;
+  transform: translateY(-50%);
+  margin: 0;
+  padding: 0.35rem 0.65rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
   white-space: nowrap;
+}
+
+.password-field__toggle:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.password-field__toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 input:focus,
@@ -396,9 +421,11 @@ textarea:focus,
   accent-color: var(--accent, #3d8bfd);
 }
 
-.login-form .btn {
+.login-form .login-submit {
+  display: block;
   width: 100%;
   margin-top: 0.5rem;
+  box-sizing: border-box;
 }
 
 .selftest-card {

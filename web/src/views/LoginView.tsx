@@ -47,10 +47,11 @@ export function LoginView() {
         <form className="login-form" onSubmit={onSubmit} autoComplete="current-password">
           <label className="field" htmlFor="password">
             <span>Password</span>
-            <div className="password-row">
+            <div className="password-field">
               <input
                 id="password"
                 name="password"
+                className="password-field__input"
                 type={showPassword ? 'text' : 'password'}
                 required
                 minLength={16}
@@ -61,7 +62,7 @@ export function LoginView() {
               />
               <button
                 type="button"
-                className="btn ghost password-toggle"
+                className="password-field__toggle"
                 aria-pressed={showPassword}
                 aria-label={showPassword ? 'Hide password' : 'Show password'}
                 onClick={() => setShowPassword((v) => !v)}
@@ -75,7 +76,7 @@ export function LoginView() {
               {error}
             </p>
           ) : null}
-          <button type="submit" className="btn primary" disabled={busy}>
+          <button type="submit" className="btn primary login-submit" disabled={busy}>
             Sign in
           </button>
         </form>
