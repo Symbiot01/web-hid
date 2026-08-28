@@ -1,7 +1,8 @@
 import { useNavigate } from 'react-router-dom';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { useHidSocket } from '../hooks/useHidSocket';
 import { useLiveHid, type ConsoleViewName } from '../hooks/useLiveHid';
+import { fetchPhoto } from '../lib/fetchPhoto';
 import { PasteView } from './PasteView';
 import { SelfTestView } from './SelfTestView';
 import { StreamTestView } from './StreamTestView';
@@ -14,6 +15,8 @@ const TABS: { id: ConsoleViewName; label: string }[] = [
   { id: 'streamtest', label: 'Stream-test' },
 ];
 
+type LightboxState = { url: string; filename: string };
+
 export function ConsoleView() {
   const navigate = useNavigate();
   const [view, setView] = useState<ConsoleViewName>('focus');
@@ -23,6 +26,7 @@ export function ConsoleView() {
   const {
     wsConnected,
     deviceConnected,
+    captureConnected,
     lastError,
     clearError,
     sendBinary,
@@ -39,9 +43,66 @@ export function ConsoleView() {
     scratchRef,
   });
 
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState<LightboxState | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (lightbox) {
+        URL.revokeObjectURL(lightbox.url);
+      }
+    };
+  }, [lightbox]);
+
+  useEffect(() => {
+    if (!lightbox) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        closeLightbox();
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [lightbox]);
+
   if (lastError && live.liveActive && lastError !== 'Key not supported') {
-    // surface once via lastKey path in hook; clear sticky
     clearError();
+  }
+
+  function closeLightbox() {
+    setLightbox((prev) => {
+      if (prev) URL.revokeObjectURL(prev.url);
+      return null;
+    });
+  }
+
+  async function onSnapshot(e: MouseEvent) {
+    e.stopPropagation();
+    if (photoBusy || !captureConnected) return;
+    setPhotoBusy(true);
+    setPhotoError(null);
+    const result = await fetchPhoto();
+    setPhotoBusy(false);
+    if (!result.ok) {
+      setPhotoError(result.error);
+      return;
+    }
+    setLightbox((prev) => {
+      if (prev) URL.revokeObjectURL(prev.url);
+      return {
+        url: URL.createObjectURL(result.blob),
+        filename: result.filename,
+      };
+    });
+  }
+
+  function downloadLightbox() {
+    if (!lightbox) return;
+    const a = document.createElement('a');
+    a.href = lightbox.url;
+    a.download = lightbox.filename;
+    a.click();
   }
 
   async function logout() {
@@ -65,6 +126,31 @@ export function ConsoleView() {
   const stageClass =
     'video-stage' +
     (live.liveActive && (view === 'focus' || view === 'split') ? ' hid-focus' : '');
+
+  const canSnapshot = captureConnected && !photoBusy;
+
+  function snapshotChrome() {
+    return (
+      <>
+        <span className="chrome-sep" aria-hidden="true" />
+        <button
+          type="button"
+          className="btn ghost"
+          disabled={!canSnapshot}
+          title={
+            captureConnected
+              ? 'Capture still JPEG from Pi'
+              : 'Capture node offline'
+          }
+          onClick={(e) => {
+            void onSnapshot(e);
+          }}
+        >
+          {photoBusy ? 'Snapshot…' : 'Snapshot'}
+        </button>
+      </>
+    );
+  }
 
   function mouseChrome() {
     return (
@@ -140,8 +226,8 @@ export function ConsoleView() {
         <div>
           <h1>Operator Console</h1>
           <p className="muted">
-            Live keys and relative mouse go to the ESP32 over USB HID. Camera feed is a
-            placeholder until capture is wired.
+            Live keys and mouse go to the ESP32. Snapshot pulls a still from the Pi over
+            capture WS. Live camera pane is still a placeholder until Focus WHEP.
           </p>
         </div>
         <div className="topbar-actions">
@@ -152,6 +238,13 @@ export function ConsoleView() {
               aria-live="polite"
             >
               {deviceConnected ? 'Connected' : 'Disconnected'}
+            </span>
+            <span className="label">Capture</span>
+            <span
+              className={`badge ${captureConnected ? 'online' : 'offline'}`}
+              aria-live="polite"
+            >
+              {captureConnected ? 'Online' : 'Offline'}
             </span>
             <span className={`badge ${wsConnected ? 'online' : 'muted-badge'}`} aria-live="polite">
               {wsConnected ? 'WS connected' : 'WS disconnected'}
@@ -216,11 +309,12 @@ export function ConsoleView() {
               >
                 Stop
               </button>
+              {snapshotChrome()}
               {mouseChrome()}
               <span className="hint muted">{live.hint}</span>
             </div>
           </div>
-          <p className="muted live-last">{live.lastKey}</p>
+          <p className="muted live-last">{photoError || live.lastKey}</p>
         </section>
       ) : null}
 
@@ -260,6 +354,7 @@ export function ConsoleView() {
                 >
                   Stop
                 </button>
+                {snapshotChrome()}
                 {mouseChrome()}
               </div>
             </div>
@@ -277,7 +372,7 @@ export function ConsoleView() {
               </label>
             </div>
           </div>
-          <p className="muted live-last">{live.lastKey}</p>
+          <p className="muted live-last">{photoError || live.lastKey}</p>
           <p className="hint muted">{live.hint}</p>
         </section>
       ) : null}
@@ -299,6 +394,32 @@ export function ConsoleView() {
       ) : null}
 
       {view === 'streamtest' ? <StreamTestView active={view === 'streamtest'} /> : null}
+
+      {lightbox ? (
+        <div
+          className="photo-lightbox"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Capture snapshot"
+          onClick={closeLightbox}
+        >
+          <div
+            className="photo-lightbox-panel"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img src={lightbox.url} alt={lightbox.filename} />
+            <div className="photo-lightbox-actions">
+              <span className="muted">{lightbox.filename}</span>
+              <button type="button" className="btn ghost" onClick={downloadLightbox}>
+                Download
+              </button>
+              <button type="button" className="btn primary" onClick={closeLightbox}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

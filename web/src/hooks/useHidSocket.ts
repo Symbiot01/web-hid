@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createHidSocket, type HidSocket } from '../lib/hidSocket';
 
+type StatusPayload = {
+  deviceConnected?: boolean;
+  captureConnected?: boolean;
+};
+
 export function useHidSocket() {
   const socketRef = useRef<HidSocket | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [deviceConnected, setDeviceConnected] = useState(false);
+  const [captureConnected, setCaptureConnected] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -25,22 +31,37 @@ export function useHidSocket() {
     socketRef.current = socket;
     socket.open();
 
-    void fetch('/api/status', {
-      credentials: 'same-origin',
-      headers: { Accept: 'application/json' },
-    })
-      .then(async (res) => {
+    let cancelled = false;
+
+    async function pullStatus() {
+      try {
+        const res = await fetch('/api/status', {
+          credentials: 'same-origin',
+          headers: { Accept: 'application/json' },
+        });
+        if (cancelled) return;
         if (res.status === 401) {
           window.location.assign('/');
           return;
         }
         if (!res.ok) return;
-        const data = (await res.json()) as { deviceConnected?: boolean };
+        const data = (await res.json()) as StatusPayload;
+        if (cancelled) return;
         setDeviceConnected(Boolean(data.deviceConnected));
-      })
-      .catch(() => undefined);
+        setCaptureConnected(Boolean(data.captureConnected));
+      } catch {
+        // ignore transient poll errors
+      }
+    }
+
+    void pullStatus();
+    const pollId = window.setInterval(() => {
+      void pullStatus();
+    }, 5000);
 
     return () => {
+      cancelled = true;
+      window.clearInterval(pollId);
       socket.close();
       socketRef.current = null;
     };
@@ -59,6 +80,7 @@ export function useHidSocket() {
   return {
     wsConnected,
     deviceConnected,
+    captureConnected,
     lastError,
     clearError,
     sendBinary,
