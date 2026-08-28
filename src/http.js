@@ -15,6 +15,14 @@ const {
   PASTE_MAX_CHARS,
 } = require('./auth');
 const { fetchStillJpeg } = require('./photo');
+const {
+  PasteJobRunner,
+  clampInt,
+  WPM_MIN,
+  WPM_MAX,
+  JITTER_MIN,
+  JITTER_MAX,
+} = require('./pasteJob');
 
 /**
  * @param {{
@@ -25,6 +33,7 @@ const { fetchStillJpeg } = require('./photo');
  */
 function createApp(opts) {
   const { config, forwarder, captureHub } = opts;
+  const pasteJobs = new PasteJobRunner(forwarder);
   const publicDir = path.join(__dirname, 'public');
   const indexHtml = path.join(publicDir, 'index.html');
   const app = express();
@@ -97,19 +106,59 @@ function createApp(opts) {
     });
   });
 
-  app.post('/api/paste', requireSession(config.sessionSecret), (req, res) => {
-    const text = req.body && typeof req.body.text === 'string' ? req.body.text : '';
+  // Dump or paced paste. Pacing (WPM/jitter) is owned by this relay — not the ESP32.
+  app.post('/api/paste', requireSession(config.sessionSecret), async (req, res) => {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const text = typeof body.text === 'string' ? body.text : '';
     if (!text) {
       return res.status(400).json({ error: 'Empty text' });
     }
     if (text.length > PASTE_MAX_CHARS) {
       return res.status(400).json({ error: 'Text too long' });
     }
-    const result = forwarder.sendPasteText(text);
-    if (!result.ok) {
-      return res.status(409).json({ error: result.message });
+
+    const mode = body.mode === 'paced' ? 'paced' : 'dump';
+
+    if (mode === 'dump') {
+      const result = pasteJobs.dump(text);
+      if (!result.ok) {
+        return res.status(409).json({ error: result.message });
+      }
+      return res.status(200).json({
+        ok: true,
+        mode: 'dump',
+        chars: text.length,
+      });
     }
-    return res.status(200).json({ ok: true, chars: result.chars });
+
+    const wpm = clampInt(body.wpm, WPM_MIN, WPM_MAX, 80);
+    const jitterPct = clampInt(body.jitterPct, JITTER_MIN, JITTER_MAX, 25);
+
+    try {
+      const result = await pasteJobs.paced({ text, wpm, jitterPct });
+      if (!result.ok) {
+        return res.status(409).json({
+          error: result.message,
+          sent: result.sent,
+          total: result.total,
+        });
+      }
+      return res.status(200).json({
+        ok: true,
+        mode: 'paced',
+        chars: result.chars,
+        wpm,
+        jitterPct,
+      });
+    } catch (err) {
+      console.error('[paste] paced failed:', err && err.message);
+      return res.status(500).json({ error: 'Paste failed' });
+    }
+  });
+
+  app.post('/api/paste/cancel', requireSession(config.sessionSecret), (_req, res) => {
+    pasteJobs.cancel();
+    return res.status(200).json({ ok: true });
   });
 
   // Slice E — session → Pi via /ws/capture (CAPTURE_TOKEN never leaves the server).

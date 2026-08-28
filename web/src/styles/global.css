@@ -337,6 +337,65 @@ textarea:focus,
   font-size: 0.85rem;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.paste-lead {
+  margin: 0 0 1rem;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.paste-lead strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.paste-mode {
+  border: 0;
+  margin: 0 0 0.85rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.radio-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.radio-row strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.radio-row code {
+  font-size: 0.85em;
+}
+
+.paste-pace {
+  margin-bottom: 0.5rem;
+}
+
+.paste-pace input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent, #3d8bfd);
+}
+
 .login-form .btn {
   width: 100%;
   margin-top: 0.5rem;
