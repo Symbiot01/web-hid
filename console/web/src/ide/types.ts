@@ -1,0 +1,42 @@
+export type EditorTab = {
+  id: string;
+  name: string;
+  value: string;
+  dirty: boolean;
+};
+
+export type TestStatus = 'idle' | 'pass' | 'fail';
+
+export type TestCase = {
+  id: string;
+  input: string;
+  expected: string;
+  actual: string;
+  status: TestStatus;
+};
+
+export type AgentMode = 'ask' | 'agent';
+
+export type AgentPhase = 'idle' | 'working' | 'needs_human' | 'solved' | 'blocked';
+
+export type AgentMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+};
+
+export type AgentView = {
+  configured: boolean;
+  phase: AgentPhase;
+  messages: Array<{ role: 'user' | 'assistant'; text: string }>;
+  source: string | null;
+  cases: Array<{ id: string; input: string; expected: string; actual: string; status: TestStatus }>;
+  output: string;
+};
+
+export const INITIAL_MAIN = `#include <iostream>
+
+int main() {
+  return 0;
+}
+`;

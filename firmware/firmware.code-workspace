@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"name": "firmware",
+			"path": "."
+		},
+		{
+			"name": "console",
+			"path": "../console"
+		}
+	],
+	"settings": {}
+}

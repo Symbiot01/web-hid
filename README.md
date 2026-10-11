@@ -2,43 +2,43 @@
 
 | Directory | Role |
 |---|---|
-| `HID/` | Operator console (Node/Express + React). This is the Coolify deploy. |
-| `web-hid/` | ESP32-S3 firmware (PlatformIO). |
-| `capture/` | LookCam bridge and the outbound capture agent. |
+| `console/` | Operator website and API (Node/Express + React). Coolify builds this tree from the `web-hid` GitHub repo root. |
+| `firmware/` | ESP32-S3 USB keyboard and mouse (PlatformIO). |
+| `bridge/` | LookCam session bridge and the desk capture agent. |
 
 ## Secrets
 
 Do not commit real credentials.
 
-- Server: copy `HID/.env.example` → `HID/.env`
-- Firmware: copy `web-hid/include/secrets.h.example` → `web-hid/include/secrets.h`
-- Capture: copy `capture/env.example` → `capture/.env` on the device only (`chmod 600`)
+- Server: copy `console/.env.example` → `console/.env`
+- Firmware: copy `firmware/include/secrets.h.example` → `firmware/include/secrets.h`
+- Bridge: copy `bridge/env.example` → `bridge/.env` on the device only (`chmod 600`)
 
 `DEVICE_TOKEN` stays on the HID relay and the ESP32. `CAPTURE_TOKEN` and `BRIDGE_TOKEN` stay on this server and the agent or bridge that dials in. The browser never receives them.
 
 ## Quick start
 
-Server (see `HID/README.md`):
+Server (see `console/README.md`):
 
 ```bash
-cd HID
+cd console
 cp .env.example .env
 npm install
 npm run build
 npm start
 ```
 
-Firmware (see `web-hid/`):
+Firmware (see `firmware/`):
 
 ```bash
-cd web-hid
+cd firmware
 cp include/secrets.h.example include/secrets.h
 pio run -t upload
 ```
 
-Capture (see `capture/README.md`):
+Bridge (see `bridge/README.md`):
 
 ```bash
-cd capture
+cd bridge
 cp env.example .env
 ```

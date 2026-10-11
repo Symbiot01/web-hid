@@ -22,8 +22,8 @@ dist/
 dist-ssr/
 
 # HID Vite emit (Docker rebuilds this)
-HID/src/public/assets/
-HID/src/public/index.html
+console/src/public/assets/
+console/src/public/index.html
 
 # Editor / OS
 .idea/
