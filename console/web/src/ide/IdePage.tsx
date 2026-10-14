@@ -670,6 +670,7 @@ export function IdePage({ busy, onLogout }: Props) {
                 }}
                 running={running}
                 view={editorView}
+                keepStreamWarm={bottomTab === 'camera'}
                 onView={showView}
                 stream={cameraStream}
                 reconnectSeq={streamReconnectSeq}

@@ -5,10 +5,11 @@ import { startWhep, type WhepSession } from './whep.ts';
 
 type Status = 'connecting' | 'live' | 'offline';
 
-const RETRY_MS = [3000, 8000, 15000];
+const RETRY_MS = [1000, 2000, 3500];
 
 type Props = {
   active: boolean;
+  keepWarm: boolean;
   stream: 2 | 3;
   reconnectSeq: number;
   liveMode: LiveMode | null;
@@ -18,6 +19,7 @@ type Props = {
 
 export function StreamPane({
   active,
+  keepWarm,
   stream,
   reconnectSeq,
   liveMode,
@@ -54,7 +56,7 @@ export function StreamPane({
   }, [onBindVideoGrabber]);
 
   useEffect(() => {
-    if (!active) return;
+    if (!active && !keepWarm) return;
     const id = crypto.randomUUID();
     let stop = false;
     const beat = () => {
@@ -67,12 +69,12 @@ export function StreamPane({
       }).catch(() => undefined);
     };
     beat();
-    const timer = window.setInterval(beat, 4000);
+    const timer = window.setInterval(beat, 3000);
     return () => {
       stop = true;
       window.clearInterval(timer);
     };
-  }, [active, stream]);
+  }, [active, keepWarm, stream]);
 
   useEffect(() => {
     if (!active) {

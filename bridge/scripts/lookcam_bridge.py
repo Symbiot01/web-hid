@@ -130,13 +130,21 @@ def selftest() -> None:
     assert framed[:4] == bytes.fromhex("a0afafaf")
     assert framed[-4:] == bytes.fromhex("f4f3f2f1")
     assert struct.unpack_from("<I", framed, 0x16)[0] == len(b'{"cmd":"GetDevInfo"}')
+    b = Bridge()
+    b.video_open = True
+    b._take_video(10, b"pkt10")
+    assert b.video_bytes == 5 and b.video_next == 11
+    # Simulate packets 11 and 12 dropped on UDP, followed by 13..24 arriving
+    for seq in range(13, 25):
+        b._take_video(seq, b"x")
+    assert b.video_next == 25 and len(b.video_buf) == 0 and b.video_bytes == 5 + 12
 
 
 class H264Upload:
     def __init__(self, base: str, token: str) -> None:
         self.base = base
         self.token = token
-        self.box: queue.Queue[bytes | None] = queue.Queue(maxsize=200)
+        self.box: queue.Queue[bytes | None] = queue.Queue(maxsize=400)
         self.stop = threading.Event()
         self.thread: threading.Thread | None = None
         self.connected = False
@@ -178,7 +186,7 @@ class H264Upload:
             except Exception:
                 self.connected = False
                 self.error = "upload failed"
-                time.sleep(1.5)
+                time.sleep(0.4)
 
     def _post(self) -> None:
         parsed = urllib.parse.urlparse(self.base)
@@ -250,6 +258,7 @@ class Bridge:
         self.opened_stream = 2
         self.video_next = None
         self.video_buf: dict[int, bytes] = {}
+        self.gap_since = 0.0
         self.video_bytes = 0
         self.last_video = 0.0
         self.video_opened_at = 0.0
@@ -319,11 +328,16 @@ class Bridge:
         return 0
 
     def _housekeeping(self, sock: socket.socket, now: float) -> None:
+        if self.video_open and self.video_buf and self.gap_since and (now - self.gap_since) >= 0.18:
+            if self.video_next is not None:
+                self.video_next = min(self.video_buf, key=lambda k: (k - self.video_next) & 0xFFFF)
+            self.gap_since = 0.0
+            self._drain_video(now)
         if self.rediscover_at and now >= self.rediscover_at:
             self.rediscover_at = 0.0
             self._reset("camera changed network")
             return
-        if self.peer and now - self.last_rx > 8:
+        if self.peer and now - self.last_rx > 12:
             self._reset("session went quiet")
             return
         if not self.peer and now >= self.backoff_until and now - self.last_search > 0.4:
@@ -337,7 +351,7 @@ class Bridge:
         if self.peer and not self.ready and now - self.peer_since > 4:
             self._reset("punch timed out")
             return
-        if self.ready and now - self.last_alive > 1:
+        if self.ready and now - self.last_alive > 0.8:
             self._send(sock, pppp(0xE0))
             self.last_alive = now
         self._tick_pending(sock, now)
@@ -528,10 +542,12 @@ class Bridge:
                 self.login_ok = False
             return
         if kind == "video-start" and ok:
+            if not self.video_open or self.opened_stream != pending["args"].get("stream", 2):
+                self.video_next = None
+                self.video_buf.clear()
+                self.gap_since = 0.0
             self.video_open = True
             self.opened_stream = pending["args"].get("stream", 2)
-            self.video_next = None
-            self.video_buf.clear()
             self.video_opened_at = time.monotonic()
             self.stalls = 0
             return
@@ -614,27 +630,47 @@ class Bridge:
                 self._take_video(index, payload)
 
     def _take_video(self, index: int, payload: bytes) -> None:
-        if self.video_next is not None and index == (self.video_next - 1) & 0xFFFF:
+        if self.video_next is None:
+            self.video_next = index
+        diff = (index - self.video_next) & 0xFFFF
+        if diff >= 0x8000:
             return
         if index in self.video_buf:
             return
         self.video_buf[index] = payload
-        if self.video_next is None:
-            self.video_next = index
-        while self.video_next in self.video_buf:
+        now = time.monotonic()
+        if self.video_next not in self.video_buf:
+            if not self.gap_since:
+                self.gap_since = now
+            if len(self.video_buf) >= 12 or (now - self.gap_since) >= 0.18:
+                self.video_next = min(self.video_buf, key=lambda k: (k - self.video_next) & 0xFFFF)
+                self.gap_since = 0.0
+        else:
+            self.gap_since = 0.0
+        self._drain_video(now)
+
+    def _drain_video(self, now: float) -> None:
+        while self.video_next is not None and self.video_next in self.video_buf:
             body = self.video_buf.pop(self.video_next)
             chunk = body[VIDEO_HEADER:] if body.startswith(FRAME_MARK) and len(body) > VIDEO_HEADER else body
             if chunk:
                 self.video_bytes += len(chunk)
-                self.last_video = time.monotonic()
+                self.last_video = now
                 self.stalls = 0
+                self.attempt = 1
                 desired, _stream = self._desired()
                 if desired:
                     self.pump.offer(chunk)
                     self.pump.ensure()
             self.video_next = (self.video_next + 1) & 0xFFFF
-        if len(self.video_buf) > 64 and self.video_next not in self.video_buf:
-            self.video_next = (self.video_next + 1) & 0xFFFF
+        if self.video_buf and self.video_next is not None:
+            stale = [k for k in self.video_buf if ((k - self.video_next) & 0xFFFF) >= 0x8000]
+            for k in stale:
+                self.video_buf.pop(k, None)
+        if not self.video_buf:
+            self.gap_since = 0.0
+        elif not self.gap_since:
+            self.gap_since = now
 
     def _search(self, sock: socket.socket) -> None:
         pkt = pppp(0x30)

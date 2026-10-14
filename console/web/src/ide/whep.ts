@@ -3,20 +3,32 @@ export type WhepSession = {
   pc: RTCPeerConnection;
 };
 
-function waitIceComplete(pc: RTCPeerConnection, timeoutMs = 4000): Promise<void> {
+function waitIceComplete(pc: RTCPeerConnection, timeoutMs = 800): Promise<void> {
   if (pc.iceGatheringState === 'complete') return Promise.resolve();
   return new Promise((resolve) => {
-    const timer = window.setTimeout(() => {
-      pc.removeEventListener('icegatheringstatechange', onChange);
-      resolve();
-    }, timeoutMs);
-    function onChange() {
-      if (pc.iceGatheringState !== 'complete') return;
+    let candidateTimer = 0;
+    const finish = () => {
       window.clearTimeout(timer);
+      if (candidateTimer) window.clearTimeout(candidateTimer);
       pc.removeEventListener('icegatheringstatechange', onChange);
+      pc.removeEventListener('icecandidate', onCandidate);
       resolve();
+    };
+    const timer = window.setTimeout(finish, timeoutMs);
+    function onChange() {
+      if (pc.iceGatheringState === 'complete') finish();
+    }
+    function onCandidate(event: RTCPeerConnectionIceEvent) {
+      if (!event.candidate) {
+        finish();
+        return;
+      }
+      if (!candidateTimer) {
+        candidateTimer = window.setTimeout(finish, 150);
+      }
     }
     pc.addEventListener('icegatheringstatechange', onChange);
+    pc.addEventListener('icecandidate', onCandidate);
   });
 }
 

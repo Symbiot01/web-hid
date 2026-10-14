@@ -19,6 +19,7 @@ type Props = {
   onTest: () => void;
   running: 'program' | 'tests' | null;
   view: 'editor' | 'stream';
+  keepStreamWarm: boolean;
   onView: (view: 'editor' | 'stream') => void;
   stream: 2 | 3;
   reconnectSeq: number;
@@ -47,6 +48,7 @@ export function EditorPane({
   onTest,
   running,
   view,
+  keepStreamWarm,
   onView,
   stream,
   reconnectSeq,
@@ -330,6 +332,7 @@ export function EditorPane({
         <div className={view === 'stream' ? 'ide-fill' : 'ide-hidden'}>
           <StreamPane
             active={view === 'stream'}
+            keepWarm={keepStreamWarm}
             stream={stream}
             reconnectSeq={reconnectSeq}
             liveMode={liveMode}
