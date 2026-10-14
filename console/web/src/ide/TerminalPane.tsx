@@ -20,6 +20,8 @@ type Props = {
   stream: 2 | 3;
   onStream: (stream: 2 | 3) => void;
   onOpenStream: () => void;
+  onStopStream: () => Promise<string>;
+  streamStopped: boolean;
   onSnap: (kind: 'frame' | 'agent', target?: 'agent' | 'save', resetFirst?: boolean) => Promise<string>;
   continuous: boolean;
   liveMode: LiveMode | null;
@@ -42,6 +44,8 @@ export function TerminalPane({
   stream,
   onStream,
   onOpenStream,
+  onStopStream,
+  streamStopped,
   onSnap,
   continuous,
   liveMode,
@@ -97,6 +101,8 @@ export function TerminalPane({
           stream={stream}
           onStream={onStream}
           onOpenStream={onOpenStream}
+          onStopStream={onStopStream}
+          streamStopped={streamStopped}
           onSnap={onSnap}
         />
       </div>

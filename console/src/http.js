@@ -21,6 +21,7 @@ const {
   closeWhep,
   streamStatus,
   startIngest,
+  stopIngest,
   grabFrame,
   SDP_MAX,
 } = require('./stream');
@@ -317,6 +318,17 @@ function createApp(opts) {
   app.post('/api/camera/watch', requireSession(config.sessionSecret), watchLimiter, (req, res) => {
     const problem = camera.watch(req.body);
     if (problem) return res.status(400).json({ error: problem });
+    return res.status(200).json({ ok: true });
+  });
+
+  app.post('/api/camera/stop', requireSession(config.sessionSecret), watchLimiter, (_req, res) => {
+    camera.release();
+    stopIngest('cam');
+    return res.status(200).json({ ok: true });
+  });
+
+  app.post('/api/camera/resume', requireSession(config.sessionSecret), watchLimiter, (_req, res) => {
+    camera.resume();
     return res.status(200).json({ ok: true });
   });
 

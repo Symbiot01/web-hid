@@ -112,6 +112,7 @@ export function IdePage({ busy, onLogout }: Props) {
   const [editorView, setEditorView] = useState<'editor' | 'stream'>('editor');
   const [cameraStream, setCameraStream] = useState<2 | 3>(2);
   const [streamReconnectSeq, setStreamReconnectSeq] = useState(0);
+  const [streamStopped, setStreamStopped] = useState(false);
   const [hidContinuous, setHidContinuous] = useState(false);
   const [bottomTab, setBottomTab] = useState<'terminal' | 'camera' | 'hid'>('terminal');
   const [liveMode, setLiveMode] = useState<LiveMode | null>(null);
@@ -260,9 +261,10 @@ export function IdePage({ busy, onLogout }: Props) {
 
   function enterLive(mode: LiveMode) {
     setHidContinuous(false);
-    setEditorView('stream');
     setLiveMode(mode);
     setSnapNote('');
+    if (streamStopped) void resumeStream(false);
+    else setEditorView('stream');
   }
 
   function leaveLive() {
@@ -271,7 +273,47 @@ export function IdePage({ busy, onLogout }: Props) {
 
   function showView(next: 'editor' | 'stream') {
     setEditorView(next);
-    if (next !== 'stream') setLiveMode(null);
+    if (next !== 'stream') {
+      setLiveMode(null);
+      return;
+    }
+    if (streamStopped) void resumeStream(false);
+  }
+
+  async function resumeStream(reconnect: boolean) {
+    try {
+      await fetch('/api/camera/resume', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+    } catch {
+      // The next watch heartbeat reports the failure if the server is still held.
+    }
+    setStreamStopped(false);
+    setEditorView('stream');
+    if (reconnect) setStreamReconnectSeq((seq) => seq + 1);
+  }
+
+  async function stopStream() {
+    setStreamStopped(true);
+    setLiveMode(null);
+    try {
+      const response = await fetch('/api/camera/stop', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        return payload?.error || 'Could not stop the stream';
+      }
+      return 'Stream stopped';
+    } catch {
+      return 'Could not stop the stream';
+    }
   }
 
   function attachToAgent(file: File, resetFirst: boolean) {
@@ -671,6 +713,7 @@ export function IdePage({ busy, onLogout }: Props) {
                 running={running}
                 view={editorView}
                 keepStreamWarm={bottomTab === 'camera'}
+                streamSuspended={streamStopped}
                 onView={showView}
                 stream={cameraStream}
                 reconnectSeq={streamReconnectSeq}
@@ -695,9 +738,10 @@ export function IdePage({ busy, onLogout }: Props) {
                 stream={cameraStream}
                 onStream={setCameraStream}
                 onOpenStream={() => {
-                  setEditorView('stream');
-                  setStreamReconnectSeq((seq) => seq + 1);
+                  void resumeStream(true);
                 }}
+                onStopStream={stopStream}
+                streamStopped={streamStopped}
                 onSnap={snap}
                 continuous={hidContinuous}
                 liveMode={liveMode}

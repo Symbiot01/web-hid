@@ -13,6 +13,7 @@ type Props = {
   stream: 2 | 3;
   reconnectSeq: number;
   liveMode: LiveMode | null;
+  suspended: boolean;
   onLive: (mode: LiveMode) => void;
   onLeaveLive: () => void;
   sendFrame: (buf: ArrayBuffer | null) => boolean;
@@ -38,6 +39,7 @@ export function StreamPane({
   stream,
   reconnectSeq,
   liveMode,
+  suspended,
   onLive,
   onLeaveLive,
   sendFrame,
@@ -98,7 +100,7 @@ export function StreamPane({
   useEffect(() => {
     if (!active) {
       setStatus('offline');
-      setDetail('No signal');
+      setDetail(suspended ? 'Stopped' : 'No signal');
       return;
     }
 
@@ -184,7 +186,7 @@ export function StreamPane({
       for (const track of mediaStream.getTracks()) track.stop();
       void session?.stop();
     };
-  }, [active, reconnectSeq, stream]);
+  }, [active, reconnectSeq, stream, suspended]);
 
   useEffect(() => {
     if (!active || !liveMode) return;

@@ -201,6 +201,7 @@ function createCameraControl(options = {}) {
   let poller = null;
   let stopTimer = /** @type {unknown} */ (null);
   let videoDesired = false;
+  let held = false;
   let stream = 2;
   let configured = false;
   let lastSeen = 0;
@@ -328,7 +329,22 @@ function createCameraControl(options = {}) {
    * @param {unknown} body
    * @returns {string | null}
    */
+  function release() {
+    held = true;
+    watchers.clear();
+    if (stopTimer) {
+      cancel(stopTimer);
+      stopTimer = null;
+    }
+    setVideo(false);
+  }
+
+  function resume() {
+    held = false;
+  }
+
   function watch(body) {
+    if (held) return 'Stream is stopped';
     const input = body && typeof body === 'object' ? /** @type {Record<string, unknown>} */ (body) : {};
     const id = input.id;
     if (typeof id !== 'string' || !/^[A-Za-z0-9-]{8,64}$/.test(id)) return 'Invalid watch id';
@@ -437,7 +453,7 @@ function createCameraControl(options = {}) {
     return null;
   }
 
-  return { snapshot, watch, command, applyStatus, submitResult, drain, hold, sweep };
+  return { snapshot, watch, release, resume, command, applyStatus, submitResult, drain, hold, sweep };
 }
 
 module.exports = {

@@ -71,13 +71,16 @@ type Props = {
   stream: 2 | 3;
   onStream: (stream: 2 | 3) => void;
   onOpenStream: () => void;
+  onStopStream: () => Promise<string>;
+  streamStopped: boolean;
   onSnap: (kind: 'frame' | 'agent', target?: 'agent' | 'save', resetFirst?: boolean) => Promise<string>;
 };
 
-export function CameraPanel({ active, stream, onStream, onOpenStream, onSnap }: Props) {
+export function CameraPanel({ active, stream, onStream, onOpenStream, onStopStream, streamStopped, onSnap }: Props) {
   const [status, setStatus] = useState<CameraStatus | null>(null);
   const [output, setOutput] = useState('Ready. Use the top bar to Snap Frame or Snap Agent directly into the Agent pane.');
   const [busy, setBusy] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [capturing, setCapturing] = useState<string | null>(null);
   const [resetOnCapture, setResetOnCapture] = useState(false);
   const [alarm, setAlarm] = useState<AlarmForm>(EMPTY_ALARM);
@@ -275,6 +278,20 @@ export function CameraPanel({ active, stream, onStream, onOpenStream, onSnap }: 
                 title="Open the Stream tab and reconnect WebRTC player"
               >
                 1. Open / Reconnect Stream
+              </button>
+              <button
+                type="button"
+                className="btn danger ide-mini"
+                disabled={stopping || streamStopped}
+                onClick={() => {
+                  setStopping(true);
+                  void onStopStream()
+                    .then((message) => setOutput(message))
+                    .finally(() => setStopping(false));
+                }}
+                title="Stop the camera video and the player"
+              >
+                {stopping ? 'Stopping…' : 'Stop stream'}
               </button>
               <button
                 type="button"

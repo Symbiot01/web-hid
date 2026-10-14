@@ -80,6 +80,28 @@ test('viewer lease starts video and stops it after the grace period', () => {
   assert.equal(camera.snapshot().video, 'off');
 });
 
+test('stop holds the camera off until resume', () => {
+  const camera = createCameraControl({
+    manual: true,
+    now: () => 2_000,
+    schedule: (fn) => ({ fn, dead: false }),
+    cancel: (timer) => {
+      timer.dead = true;
+    },
+  });
+  assert.equal(camera.watch({ id: 'viewer-stop', stream: 2 }), null);
+  assert.equal(camera.drain().video, true);
+  camera.release();
+  assert.equal(camera.drain().video, false);
+  assert.equal(camera.snapshot().video, 'off');
+  assert.equal(camera.watch({ id: 'viewer-stop', stream: 2 }), 'Stream is stopped');
+  assert.equal(camera.drain().video, false);
+  camera.resume();
+  assert.equal(camera.watch({ id: 'viewer-stop', stream: 3 }), null);
+  assert.equal(camera.snapshot().video, 'wanted');
+  assert.equal(camera.snapshot().stream, 3);
+});
+
 test('a watching viewer cancels a pending stop', () => {
   let clock = 5_000;
   /** @type {{ fn: () => void, dead: boolean }[]} */
@@ -137,6 +159,47 @@ test('offline bridge and bad arguments never queue a camera call', async () => {
   assert.equal(rejected.status, 400);
   const polled = camera.drain();
   assert.equal(polled.commands.some((item) => item.op === 'call'), false);
+});
+
+test('stop stream requires a session and blocks the next watch', async () => {
+  const { createApp } = require('./http');
+  const { createSessionToken, COOKIE_NAME } = require('./auth');
+  const sessionSecret = 's'.repeat(32);
+  const app = createApp({
+    config: {
+      gatePassword: 'g'.repeat(16),
+      sessionSecret,
+      nodeEnv: 'development',
+      trustProxy: false,
+      streamWhepUrl: 'http://127.0.0.1:9/cam/whep',
+      streamSrtUrl: 'srt://127.0.0.1:9?streamid=publish:cam',
+      bridgeToken: 'b'.repeat(32),
+      lookcamPassword: 'device-secret',
+    },
+  });
+  const server = await new Promise((resolve) => {
+    const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
+  });
+  const { port } = server.address();
+  const base = `http://127.0.0.1:${port}`;
+  const headers = {
+    cookie: `${COOKIE_NAME}=${encodeURIComponent(createSessionToken(sessionSecret))}`,
+    'content-type': 'application/json',
+  };
+  const watchBody = JSON.stringify({ id: 'viewer-stop01', stream: 2 });
+  try {
+    assert.equal((await fetch(`${base}/api/camera/stop`, { method: 'POST' })).status, 401);
+    assert.equal((await fetch(`${base}/api/camera/resume`, { method: 'POST' })).status, 401);
+    assert.equal((await fetch(`${base}/api/camera/watch`, { method: 'POST', headers, body: watchBody })).status, 200);
+    assert.equal((await fetch(`${base}/api/camera/stop`, { method: 'POST', headers, body: '{}' })).status, 200);
+    const blocked = await fetch(`${base}/api/camera/watch`, { method: 'POST', headers, body: watchBody });
+    assert.equal(blocked.status, 400);
+    assert.equal((await blocked.json()).error, 'Stream is stopped');
+    assert.equal((await fetch(`${base}/api/camera/resume`, { method: 'POST', headers, body: '{}' })).status, 200);
+    assert.equal((await fetch(`${base}/api/camera/watch`, { method: 'POST', headers, body: watchBody })).status, 200);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 test('browser camera routes never receive the device password', async () => {
