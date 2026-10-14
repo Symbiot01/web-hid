@@ -1,4 +1,12 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type DragEvent,
+  type FormEvent,
+  type ReactNode,
+} from 'react';
 import type { AgentKind, AgentMessage, AgentMode, AgentPhase, AgentStep, TestCase } from './types.ts';
 
 type ImagePayload = { mime: string; base64: string };
@@ -118,6 +126,8 @@ export function AgentPane({
   const [draft, setDraft] = useState('');
   const [imageName, setImageName] = useState('');
   const [image, setImage] = useState<ImagePayload | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
   const fileRef = useRef<HTMLInputElement>(null);
   const feedRef = useRef<HTMLOListElement>(null);
   const working = phase === 'working';
@@ -147,21 +157,86 @@ export function AgentPane({
     if (fileRef.current) fileRef.current.value = '';
   }
 
-  function chooseImage(file: File | undefined) {
+  function chooseImage(file: File | undefined, fallbackName?: string) {
     if (!file) return;
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 4 * 1024 * 1024) {
       setImage(null);
       setImageName('Use a JPEG, PNG, or WebP under 4 MB');
       return;
     }
+    if (mode !== 'agent') {
+      onMode('agent');
+    }
+    const ext = file.type === 'image/jpeg' ? 'jpg' : file.type === 'image/webp' ? 'webp' : 'png';
+    const label = file.name && file.name !== 'image.png' ? file.name : fallbackName || `clipboard.${ext}`;
     const reader = new FileReader();
     reader.onload = () => {
       const value = typeof reader.result === 'string' ? reader.result : '';
       const base64 = value.slice(value.indexOf(',') + 1);
       setImage({ mime: file.type, base64 });
-      setImageName(file.name);
+      setImageName(label);
     };
     reader.readAsDataURL(file);
+  }
+
+  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    if (!configured) return;
+    const items = event.clipboardData?.items;
+    if (items) {
+      for (let i = 0; i < items.length; i += 1) {
+        const item = items[i];
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (file) {
+            event.preventDefault();
+            const ext = file.type === 'image/jpeg' ? 'jpg' : file.type === 'image/webp' ? 'webp' : 'png';
+            chooseImage(file, `pasted-image.${ext}`);
+            return;
+          }
+        }
+      }
+    }
+    const files = event.clipboardData?.files;
+    if (files && files.length > 0 && files[0].type.startsWith('image/')) {
+      event.preventDefault();
+      chooseImage(files[0], 'pasted-image.png');
+    }
+  }
+
+  function hasFilePayload(event: DragEvent<HTMLElement>): boolean {
+    return Array.from(event.dataTransfer?.types ?? []).includes('Files');
+  }
+
+  function handleDragEnter(event: DragEvent<HTMLElement>) {
+    if (!configured || !hasFilePayload(event)) return;
+    event.preventDefault();
+    dragDepth.current += 1;
+    setDragging(true);
+  }
+
+  function handleDragOver(event: DragEvent<HTMLElement>) {
+    if (!configured || !hasFilePayload(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    if (!dragging) setDragging(true);
+  }
+
+  function handleDragLeave(event: DragEvent<HTMLElement>) {
+    if (!hasFilePayload(event)) return;
+    event.preventDefault();
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragging(false);
+  }
+
+  function handleDrop(event: DragEvent<HTMLElement>) {
+    if (!configured) return;
+    event.preventDefault();
+    dragDepth.current = 0;
+    setDragging(false);
+    const files = event.dataTransfer?.files;
+    if (!files || files.length === 0) return;
+    const imgFile = Array.from(files).find((item) => item.type.startsWith('image/')) ?? files[0];
+    chooseImage(imgFile, imgFile.name || 'dropped-image.png');
   }
 
   function body(message: AgentMessage) {
@@ -184,7 +259,14 @@ export function AgentPane({
   const hasRunCases = cases.some((item) => item.status !== 'idle');
 
   return (
-    <section className="ide-panel" aria-label="Agent">
+    <section
+      className={`ide-panel${dragging ? ' ide-panel-drop' : ''}`}
+      aria-label="Agent"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       <header className="ide-bar">
         <div className="ide-modes" role="radiogroup" aria-label="Agent mode">
           <button
@@ -293,7 +375,7 @@ export function AgentPane({
           </button>
         </div>
       ) : null}
-      <form className="ide-compose" onSubmit={submit}>
+      <form className={`ide-compose${dragging ? ' ide-compose-drop' : ''}`} onSubmit={submit}>
         <label className="sr-only" htmlFor="agent-draft">
           Message
         </label>
@@ -303,15 +385,18 @@ export function AgentPane({
           value={draft}
           disabled={!configured || (working && mode === 'ask')}
           placeholder={
-            mode === 'ask'
-              ? 'Ask about this code… (Ctrl+Enter to send)'
-              : phase === 'working'
-                ? 'Send a hint or approach for the next attempt…'
-                : phase === 'idle'
-                  ? 'Paste a problem statement or attach a screenshot… (Ctrl+Enter to send)'
-                  : 'Give guidance, specify an algorithm, or attach a new problem image…'
+            dragging
+              ? 'Drop image (PNG, JPEG, WebP) here to attach…'
+              : mode === 'ask'
+                ? 'Ask about this code, or Ctrl+V / drop a problem screenshot…'
+                : phase === 'working'
+                  ? 'Send a hint or approach for the next attempt…'
+                  : phase === 'idle'
+                    ? 'Paste a problem or screenshot (Ctrl+V), or drag & drop an image…'
+                    : 'Give guidance, specify an algorithm, or paste/drop a new image…'
           }
           onChange={(event) => setDraft(event.target.value)}
+          onPaste={handlePaste}
           onKeyDown={(event) => {
             if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
               event.preventDefault();
@@ -341,6 +426,13 @@ export function AgentPane({
               </label>
               {imageName ? (
                 <span className="ide-agent-file-pill">
+                  {image ? (
+                    <img
+                      className="ide-agent-thumb"
+                      src={`data:${image.mime};base64,${image.base64}`}
+                      alt=""
+                    />
+                  ) : null}
                   <span className="ide-agent-file">{imageName}</span>
                   {image ? (
                     <button
@@ -360,7 +452,7 @@ export function AgentPane({
               ) : null}
             </div>
           ) : (
-            <span className="muted ide-compose-shortcut">Ctrl+Enter to send</span>
+            <span className="muted ide-compose-shortcut">Ctrl+V image or Ctrl+Enter to send</span>
           )}
           <button
             type="submit"
