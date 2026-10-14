@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AgentPane } from './AgentPane.tsx';
 import { EditorPane } from './EditorPane.tsx';
+import type { HidPlay } from './hidPayload.ts';
 import './monacoSetup.ts';
 import { SplitPane } from './SplitPane.tsx';
 import { TerminalPane } from './TerminalPane.tsx';
@@ -114,6 +115,7 @@ export function IdePage({ busy, onLogout }: Props) {
   const [bottomTab, setBottomTab] = useState<'terminal' | 'camera' | 'hid'>('terminal');
   const [liveMode, setLiveMode] = useState<LiveMode | null>(null);
   const [snapNote, setSnapNote] = useState('');
+  const [hidPlay, setHidPlay] = useState<HidPlay | null>(null);
   const hid = useHidLink({
     connect: bottomTab === 'hid' || hidContinuous || liveMode !== null,
     watch: bottomTab === 'hid' || hidContinuous || liveMode !== null,
@@ -630,6 +632,7 @@ export function IdePage({ busy, onLogout }: Props) {
                 sendFrame={hid.sendFrame}
                 snapNote={snapNote}
                 onClearNote={() => setSnapNote('')}
+                hidPlay={hidPlay}
               />
             }
             second={
@@ -648,6 +651,7 @@ export function IdePage({ busy, onLogout }: Props) {
                 source={(tabs.find((tab) => tab.id === activeTabId) ?? tabs[0])?.value ?? ''}
                 fileName={(tabs.find((tab) => tab.id === activeTabId) ?? tabs[0])?.name ?? 'main.cpp'}
                 onSender={bindHid}
+                onPlay={setHidPlay}
                 hidStatus={hid.status}
                 socketOpen={hid.socketOpen}
                 hidLog={hid.log}

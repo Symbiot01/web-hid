@@ -1,5 +1,7 @@
 import Editor, { type OnMount } from '@monaco-editor/react';
+import type { editor as MonacoEditor } from 'monaco-editor';
 import { useEffect, useRef, useState, type PointerEvent } from 'react';
+import type { HidPlay } from './hidPayload.ts';
 import { releaseFrame } from './hidKeys.ts';
 import { StreamPane } from './StreamPane.tsx';
 import type { EditorTab } from './types.ts';
@@ -28,6 +30,7 @@ type Props = {
   sendFrame: (buf: ArrayBuffer | null) => boolean;
   snapNote: string;
   onClearNote: () => void;
+  hidPlay: HidPlay | null;
 };
 
 export function EditorPane({
@@ -53,6 +56,7 @@ export function EditorPane({
   sendFrame,
   snapNote,
   onClearNote,
+  hidPlay,
 }: Props) {
   const stripRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -65,8 +69,11 @@ export function EditorPane({
   viewRef.current = view;
   hidRef.current = onHidKey;
   const active = tabs.find((tab) => tab.id === activeId) ?? tabs[0];
+  const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
+  const marksRef = useRef<MonacoEditor.IEditorDecorationsCollection | null>(null);
 
   const onMount: OnMount = (editor) => {
+    editorRef.current = editor;
     const forward = (phase: 'down' | 'up', event: KeyboardEvent) => {
       if (!continuousRef.current || viewRef.current !== 'editor') return;
       if (event.repeat || event.ctrlKey || event.altKey || event.metaKey) return;
@@ -77,8 +84,34 @@ export function EditorPane({
     editor.onDidDispose(() => {
       down.dispose();
       up.dispose();
+      if (editorRef.current === editor) editorRef.current = null;
     });
   };
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    if (!editor || !model) return;
+    marksRef.current?.clear();
+    if (!hidPlay || hidPlay.map.length === 0) return;
+    const sent = Math.max(0, Math.min(hidPlay.sent, hidPlay.map.length));
+    const marks: MonacoEditor.IModelDeltaDecoration[] = [];
+    for (const [start, end] of groupOffsets(hidPlay.map, 0, sent)) {
+      marks.push({
+        range: rangeFrom(model, start, end),
+        options: { inlineClassName: 'hid-typed' },
+      });
+    }
+    if (sent < hidPlay.map.length) {
+      const at = hidPlay.map[sent];
+      marks.push({
+        range: rangeFrom(model, at, at + 1),
+        options: { className: 'hid-caret' },
+      });
+      editor.revealPositionInCenterIfOutsideViewport(model.getPositionAt(at));
+    }
+    marksRef.current = editor.createDecorationsCollection(marks);
+  }, [hidPlay, active?.value]);
 
   function reorderFromPoint(clientX: number) {
     const strip = stripRef.current;
@@ -294,11 +327,48 @@ export function EditorPane({
               automaticLayout: true,
               tabSize: 2,
               padding: { top: 8 },
+              readOnly: hidPlay !== null,
             }}
           />
         ) : null}
+          {hidPlay ? (
+            <p className="ide-hid-editor-status">
+              Sending {Math.min(hidPlay.sent, hidPlay.map.length)}/{hidPlay.map.length}
+              {hidPlay.eta ? ` · ~${hidPlay.eta} left` : ''}
+            </p>
+          ) : null}
         </div>
       </div>
     </section>
   );
+}
+
+function rangeFrom(model: MonacoEditor.ITextModel, start: number, end: number) {
+  const from = model.getPositionAt(Math.max(0, Math.min(start, model.getValueLength())));
+  const to = model.getPositionAt(Math.max(0, Math.min(end, model.getValueLength())));
+  return {
+    startLineNumber: from.lineNumber,
+    startColumn: from.column,
+    endLineNumber: to.lineNumber,
+    endColumn: to.column,
+  };
+}
+
+function groupOffsets(map: number[], from: number, to: number): Array<[number, number]> {
+  if (to <= from) return [];
+  const parts: Array<[number, number]> = [];
+  let start = map[from];
+  let prev = start;
+  for (let i = from + 1; i < to; i += 1) {
+    const at = map[i];
+    if (at === prev + 1) {
+      prev = at;
+      continue;
+    }
+    parts.push([start, prev + 1]);
+    start = at;
+    prev = at;
+  }
+  parts.push([start, prev + 1]);
+  return parts;
 }

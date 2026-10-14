@@ -1,0 +1,16 @@
+{
+  "name": "hid-simulator",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Stand-in for the ESP32 HID dongle. Writes paste and live keys to hid_test.txt.",
+  "main": "simulator.js",
+  "scripts": {
+    "start": "node simulator.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "ws": "^8.22.0"
+  }
+}

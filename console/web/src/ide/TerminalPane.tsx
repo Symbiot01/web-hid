@@ -1,5 +1,6 @@
 import { CameraPanel } from './CameraPanel.tsx';
 import { HidPane } from './HidPane.tsx';
+import type { HidPlay } from './hidPayload.ts';
 import type { LiveMode } from './useHidLink.ts';
 
 type Tab = 'terminal' | 'camera' | 'hid';
@@ -24,6 +25,7 @@ type Props = {
   source: string;
   fileName: string;
   onSender: (send: (phase: 'down' | 'up' | 'release', code?: string) => void) => void;
+  onPlay: (play: HidPlay | null) => void;
   hidStatus: HidStatus;
   socketOpen: boolean;
   hidLog: LogLine[];
@@ -43,6 +45,7 @@ export function TerminalPane({
   source,
   fileName,
   onSender,
+  onPlay,
   hidStatus,
   socketOpen,
   hidLog,
@@ -96,6 +99,7 @@ export function TerminalPane({
           source={source}
           fileName={fileName}
           onSender={onSender}
+          onPlay={onPlay}
           status={hidStatus}
           socketOpen={socketOpen}
           log={hidLog}
