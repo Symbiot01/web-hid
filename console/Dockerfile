@@ -20,7 +20,7 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOST=0.0.0.0
 
-RUN apk add --no-cache ffmpeg \
+RUN apk add --no-cache ffmpeg g++ util-linux-misc bubblewrap \
   && addgroup -S app && adduser -S -G app app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./

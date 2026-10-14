@@ -543,7 +543,12 @@ function createApp(opts) {
   app.post('/api/agent/guide', requireSession(config.sessionSecret), agentLimiter, agentJson, async (req, res) => {
     try {
       const body = req.body && typeof req.body === 'object' ? req.body : {};
-      const view = await agent.guide({ text: body.text, action: body.action });
+      const view = await agent.guide({
+        text: body.text,
+        action: body.action,
+        source: body.source,
+        cases: body.cases,
+      });
       return res.status(200).json(view);
     } catch (error) {
       return agentError(res, error);

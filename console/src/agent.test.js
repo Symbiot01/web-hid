@@ -2,12 +2,12 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createAgentControl, imageOk, parseModelJson } = require('./agent');
+const { cleanSource, createAgentControl, entryFunction, imageOk, parseModelJson, sourceHasEntry } = require('./agent');
 const { createApp } = require('./http');
 const { createSessionToken, COOKIE_NAME } = require('./auth');
 
 const KEY = 'k'.repeat(24);
-const SOURCE = 'int main(){return 0;}\n';
+const SOURCE = 'int solve(){return 0;}\nint main(){return solve();}\n';
 
 function harness(steps, results) {
   const calls = [];
@@ -38,6 +38,17 @@ test('parses model JSON and checks image bytes', () => {
   assert.equal(imageOk({ mime: 'image/jpeg', data: Buffer.from([0xff, 0xd8, 0xff]).toString('base64') }), true);
   assert.equal(imageOk({ mime: 'image/jpeg', data: Buffer.from('nope').toString('base64') }), false);
   assert.equal(imageOk({ mime: 'text/plain', data: Buffer.from([0xff, 0xd8]).toString('base64') }), false);
+  assert.equal(entryFunction('findMedianSortedArrays'), 'findMedianSortedArrays');
+  assert.equal(entryFunction('Solution::findMedianSortedArrays(vector<int>& a)'), 'findMedianSortedArrays');
+  assert.equal(entryFunction('main'), 'solve');
+  assert.equal(entryFunction('not a function'), 'solve');
+  assert.equal(sourceHasEntry(SOURCE, 'solve'), true);
+  assert.equal(sourceHasEntry('int main(){return 0;}\n', 'solve'), false);
+  assert.equal(sourceHasEntry('int solve(){return 0;}\nint main(){return 0;}\n', 'solve'), false);
+  const squished =
+    '#include <iostream>\nint main() { while (getline(cin, line)) { while (low <= high) { low++; } } return 0; }';
+  const expanded = cleanSource(squished);
+  assert.ok(expanded.split('\n').length >= 6);
 });
 
 test('solved run writes the source and does not reveal the key', async () => {
@@ -108,7 +119,7 @@ test('fixes a compile error and then passes', async () => {
       ],
       makeCases: [{ cases: [{ input: 'hi\n', expected: 'hi\n' }] }],
       review: [],
-      solve: [{ source: 'int main( {', approach: 'broken' }],
+      solve: [{ source: 'int solve(){return 0;}\nint main( {', approach: 'broken' }],
       fix: [{ source: SOURCE }],
       retry: [],
       ask: [],
@@ -152,6 +163,86 @@ test('a wrong answer retries once when the samples are valid', async () => {
   const view = await agent.begin({ text: 'sum' });
   assert.equal(view.phase, 'solved');
   assert.ok(calls.includes('retry'));
+});
+
+test('moves an algorithm out of main into solve before running', async () => {
+  const { agent, calls } = harness(
+    {
+      identify: [
+        {
+          statement: 'Median of two arrays',
+          casesFromProblem: true,
+          cases: [{ input: 'nums1 = [1,3], nums2 = [2]\n', expected: '2.00000\n' }],
+          plan: '',
+          functionName: '',
+          format: 'Print the median with five decimal places.',
+        },
+      ],
+      review: [{ ok: true, reason: '' }],
+      solve: [{ source: 'int main(){ while(1){} }\n', approach: 'search in main' }],
+      fix: [{ source: SOURCE }],
+      retry: [],
+      makeCases: [],
+      ask: [],
+    },
+    [passRun()],
+  );
+  const view = await agent.begin({ text: 'median' });
+  assert.equal(view.phase, 'solved');
+  assert.equal(view.source, SOURCE);
+  assert.ok(calls.includes('fix'));
+  assert.match(view.messages.map((item) => item.text).join('\n'), /solve/);
+});
+
+test('builds the main test wrapper first when harness is supported', async () => {
+  const calls = [];
+  const steps = {
+    identify: [
+      {
+        title: 'Median of Two Sorted Arrays',
+        statement: 'Return the median of two sorted arrays.',
+        casesFromProblem: true,
+        cases: [{ input: 'nums1 = [1,3], nums2 = [2]\n', expected: '2.00000\n' }],
+        plan: 'Binary search partition on the smaller array.',
+        functionName: 'findMedianSortedArrays',
+        signature: 'double findMedianSortedArrays(vector<int>& nums1, vector<int>& nums2)',
+        format: 'Print median with 5 decimal places.',
+      },
+    ],
+    review: [{ ok: true, reason: '' }],
+    harness: [
+      {
+        source:
+          'double findMedianSortedArrays(int a){return 0.0;}\nint main(){return (int)findMedianSortedArrays(1);}\n',
+      },
+    ],
+    solve: [
+      {
+        source:
+          'double findMedianSortedArrays(int a){return 2.0;}\nint main(){return (int)findMedianSortedArrays(1);}\n',
+        approach: 'Binary search partition in O(log(min(m, n))).',
+      },
+    ],
+  };
+  const generate = async (task) => {
+    calls.push(task);
+    return steps[task].shift();
+  };
+  generate.supportsHarness = true;
+  const agent = createAgentControl({
+    apiKey: KEY,
+    generate,
+    run: async () => ({
+      status: 'ran',
+      compile: { ok: true, stderr: '' },
+      cases: [{ status: 'pass', actual: '2.00000\n', reason: null, timeMs: 8 }],
+    }),
+  });
+  const view = await agent.begin({ text: 'median' });
+  assert.deepEqual(calls, ['identify', 'review', 'harness', 'solve']);
+  assert.equal(view.phase, 'solved');
+  assert.equal(view.entry, 'findMedianSortedArrays');
+  assert.equal(view.title, 'Median of Two Sorted Arrays');
 });
 
 test('ask does not return source', async () => {

@@ -10,6 +10,7 @@ import {
   type AgentMessage,
   type AgentMode,
   type AgentPhase,
+  type AgentStep,
   type AgentView,
   type EditorTab,
   type TestCase,
@@ -97,6 +98,12 @@ export function IdePage({ busy, onLogout }: Props) {
   const [mode, setMode] = useState<AgentMode>('ask');
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [agentPhase, setAgentPhase] = useState<AgentPhase>('idle');
+  const [agentStep, setAgentStep] = useState<AgentStep>('idle');
+  const [agentAttempt, setAgentAttempt] = useState(0);
+  const [agentMaxAttempts, setAgentMaxAttempts] = useState(3);
+  const [agentTitle, setAgentTitle] = useState('');
+  const [agentEntry, setAgentEntry] = useState('solve');
+  const [agentSignature, setAgentSignature] = useState('');
   const [agentReady, setAgentReady] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmLogout, setConfirmLogout] = useState(false);
@@ -225,7 +232,14 @@ export function IdePage({ busy, onLogout }: Props) {
         prev.map((item, index) => {
           const result = payload.cases[index];
           if (!result || submitted[index]?.id !== item.id) return item;
-          return { ...item, status: result.status, actual: result.actual };
+          return {
+            ...item,
+            status: result.status,
+            actual: result.actual,
+            stderr: result.stderr,
+            reason: result.reason,
+            timeMs: result.timeMs,
+          };
         }),
       );
     } catch {
@@ -282,7 +296,20 @@ export function IdePage({ busy, onLogout }: Props) {
   function applyAgent(view: AgentView) {
     setAgentReady(view.configured);
     setAgentPhase(view.phase);
-    setMessages(view.messages.map((item, index) => ({ id: `agent-msg-${index}`, role: item.role, text: item.text })));
+    setAgentStep(view.step ?? 'idle');
+    setAgentAttempt(view.attempt ?? 0);
+    setAgentMaxAttempts(view.maxAttempts ?? 3);
+    setAgentTitle(view.title ?? '');
+    setAgentEntry(view.entry ?? 'solve');
+    setAgentSignature(view.signature ?? '');
+    setMessages(
+      view.messages.map((item, index) => ({
+        id: `agent-msg-${index}`,
+        role: item.role,
+        text: item.text,
+        kind: item.kind,
+      })),
+    );
     if (typeof view.source === 'string' && view.source.length > 0) {
       setTabs((prev) => {
         const target = prev.find((tab) => tab.name === 'main.cpp') ?? prev.find((tab) => tab.id === activeTabId) ?? prev[0];
@@ -298,10 +325,18 @@ export function IdePage({ busy, onLogout }: Props) {
           input: item.input,
           expected: item.expected,
           actual: item.actual,
+          stderr: item.stderr,
+          reason: item.reason,
+          timeMs: item.timeMs,
           status: item.status,
         })),
       );
-      setActiveCaseId(view.cases[0].id);
+      const firstFailed = view.cases.find((item) => item.status === 'fail');
+      setActiveCaseId((prev) => {
+        if (firstFailed) return firstFailed.id;
+        if (view.cases.some((item) => item.id === prev)) return prev;
+        return view.cases[0].id;
+      });
     }
     if (view.output && view.output !== agentOutput.current) {
       const next = view.output.startsWith(agentOutput.current)
@@ -373,7 +408,11 @@ export function IdePage({ busy, onLogout }: Props) {
         body: JSON.stringify(
           starting
             ? { text, hint: '', source: active?.value ?? '', imageBase64: image?.base64, mime: image?.mime }
-            : { text },
+            : {
+                text,
+                source: active?.value ?? '',
+                cases: cases.map((item) => ({ input: item.input, expected: item.expected })),
+              },
         ),
       });
       const payload = (await response.json()) as AgentView & { error?: string };
@@ -389,13 +428,33 @@ export function IdePage({ busy, onLogout }: Props) {
     }
   }
 
-  function guide(action: 'retry' | 'cases_wrong') {
+  function guide(action: 'retry' | 'cases_wrong' | 'reset') {
+    if (action === 'reset') {
+      agentOutput.current = '';
+      void fetch('/api/agent/guide', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'reset' }),
+      })
+        .then((response) => (response.ok ? response.json() : null))
+        .then((payload: AgentView | null) => {
+          if (payload) applyAgent(payload);
+        })
+        .catch(() => undefined);
+      return;
+    }
+    const active = tabs.find((tab) => tab.id === activeTabId);
     setAgentPhase('working');
     void fetch('/api/agent/guide', {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({
+        action,
+        source: active?.value ?? '',
+        cases: cases.map((item) => ({ input: item.input, expected: item.expected })),
+      }),
     })
       .then((response) => response.json())
       .then((payload: AgentView & { error?: string }) => {
@@ -483,6 +542,13 @@ export function IdePage({ busy, onLogout }: Props) {
               <AgentPane
                 mode={mode}
                 phase={agentPhase}
+                step={agentStep}
+                attempt={agentAttempt}
+                maxAttempts={agentMaxAttempts}
+                title={agentTitle}
+                entry={agentEntry}
+                signature={agentSignature}
+                cases={cases}
                 configured={agentReady}
                 messages={messages}
                 onMode={setMode}

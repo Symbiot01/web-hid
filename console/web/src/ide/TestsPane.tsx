@@ -9,6 +9,15 @@ type Props = {
   onRemove: (id: string) => void;
 };
 
+function statusLabel(item: TestCase): string {
+  if (item.reason === 'timeout') return 'time limit';
+  if (item.reason === 'output_limit') return 'output limit';
+  if (item.reason === 'runtime') return 'runtime error';
+  if (item.status === 'pass') return 'passed';
+  if (item.status === 'fail') return 'wrong answer';
+  return 'idle';
+}
+
 export function TestsPane({ cases, activeId, onSelect, onChange, onAdd, onRemove }: Props) {
   const active = cases.find((item) => item.id === activeId) ?? cases[0];
 
@@ -37,7 +46,12 @@ export function TestsPane({ cases, activeId, onSelect, onChange, onAdd, onRemove
       {active ? (
         <div className="ide-case">
           <div className="ide-case-head">
-            <span className={`ide-result ide-result-${active.status}`}>{active.status}</span>
+            <div className="ide-case-meta">
+              <span className={`ide-result ide-result-${active.status}`}>{statusLabel(active)}</span>
+              {typeof active.timeMs === 'number' && active.status !== 'idle' ? (
+                <span className="muted ide-case-time">{active.timeMs}ms</span>
+              ) : null}
+            </div>
             {cases.length > 1 ? (
               <button type="button" className="btn ghost ide-mini" onClick={() => onRemove(active.id)}>
                 Remove
@@ -66,6 +80,12 @@ export function TestsPane({ cases, activeId, onSelect, onChange, onAdd, onRemove
             <span>Actual</span>
             <textarea id="case-actual" value={active.actual} readOnly spellCheck={false} />
           </label>
+          {active.stderr && active.stderr.trim() ? (
+            <label className="ide-field" htmlFor="case-stderr">
+              <span>Stderr</span>
+              <textarea id="case-stderr" value={active.stderr} readOnly spellCheck={false} />
+            </label>
+          ) : null}
         </div>
       ) : null}
     </section>

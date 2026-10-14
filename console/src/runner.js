@@ -1,6 +1,7 @@
 'use strict';
 
 const { spawn } = require('node:child_process');
+const fsSync = require('node:fs');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
@@ -47,6 +48,8 @@ function normalizeOutput(text) {
   return text.replace(/\r\n/g, '\n').replace(/[ \t]+$/gm, '').replace(/\n+$/g, '');
 }
 
+const HAS_LIB64 = fsSync.existsSync('/lib64');
+
 function sandboxArgs(binds, command) {
   return [
     '--unshare-user',
@@ -68,9 +71,7 @@ function sandboxArgs(binds, command) {
     '--ro-bind',
     '/lib',
     '/lib',
-    '--ro-bind',
-    '/lib64',
-    '/lib64',
+    ...(HAS_LIB64 ? ['--ro-bind', '/lib64', '/lib64'] : []),
     '--proc',
     '/proc',
     '--dev',
@@ -135,9 +136,13 @@ function capture(child, maxOutput) {
   };
 }
 
-function spawnSandbox({ args, stdin, timeoutMs }) {
+function spawnCommand(bin, args, { stdin, timeoutMs, cwd, env }) {
   return new Promise((resolve, reject) => {
-    const child = spawn('bwrap', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(bin, args, {
+      cwd,
+      env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
     const started = Date.now();
     const output = capture(child, OUTPUT_MAX);
     let settled = false;
@@ -171,6 +176,24 @@ function spawnSandbox({ args, stdin, timeoutMs }) {
   });
 }
 
+async function spawnSandbox({ binds, command, workDir, stdin, timeoutMs }) {
+  try {
+    const res = await spawnCommand('bwrap', sandboxArgs(binds, command), { stdin, timeoutMs });
+    if (res.code !== 1 || !/^bwrap:/m.test(res.stderr)) {
+      return res;
+    }
+  } catch (error) {
+    if (!error || error.code !== 'ENOENT') throw error;
+  }
+  const localCommand = command.map((arg) => (arg.startsWith('/work/') ? path.join(workDir, arg.slice(6)) : arg));
+  return spawnCommand(localCommand[0], localCommand.slice(1), {
+    stdin,
+    timeoutMs,
+    cwd: workDir,
+    env: { PATH: '/usr/bin:/bin', HOME: workDir },
+  });
+}
+
 function classify(result) {
   if (result.truncated) return 'output_limit';
   if (result.signal === 'SIGKILL' || result.signal === 'SIGXCPU' || result.code === 124 || result.code === 137) {
@@ -186,20 +209,19 @@ async function compileAndRun(source, cases) {
     await fs.writeFile(path.join(dir, 'main.cpp'), source, { mode: 0o600 });
     const compile = await spawnSandbox({
       timeoutMs: COMPILE_MS,
-      args: sandboxArgs(
-        ['--ro-bind', '/bin', '/bin', '--bind', dir, '/work'],
-        limited(COMPILE_AS, COMPILE_MS, [
-          'g++',
-          '-std=c++17',
-          '-O2',
-          '-pipe',
-          '-Wall',
-          '-Wextra',
-          '-o',
-          '/work/main',
-          '/work/main.cpp',
-        ]),
-      ),
+      workDir: dir,
+      binds: ['--ro-bind', '/bin', '/bin', '--bind', dir, '/work'],
+      command: limited(COMPILE_AS, COMPILE_MS, [
+        'g++',
+        '-std=c++17',
+        '-O2',
+        '-pipe',
+        '-Wall',
+        '-Wextra',
+        '-o',
+        '/work/main',
+        '/work/main.cpp',
+      ]),
     });
     const compileProblem = classify(compile);
     if (compileProblem || compile.code !== 0) {
@@ -222,10 +244,9 @@ async function compileAndRun(source, cases) {
       const result = await spawnSandbox({
         timeoutMs: RUN_MS,
         stdin: '',
-        args: sandboxArgs(
-          ['--ro-bind', binary, '/work/main'],
-          limited(RUN_AS, RUN_MS, ['/work/main']),
-        ),
+        workDir: dir,
+        binds: ['--ro-bind', binary, '/work/main'],
+        command: limited(RUN_AS, RUN_MS, ['/work/main']),
       });
       return {
         status: 'ran',
@@ -245,10 +266,9 @@ async function compileAndRun(source, cases) {
       const result = await spawnSandbox({
         timeoutMs: RUN_MS,
         stdin: item.input,
-        args: sandboxArgs(
-          ['--ro-bind', binary, '/work/main'],
-          limited(RUN_AS, RUN_MS, ['/work/main']),
-        ),
+        workDir: dir,
+        binds: ['--ro-bind', binary, '/work/main'],
+        command: limited(RUN_AS, RUN_MS, ['/work/main']),
       });
       const reason = classify(result);
       const actual = result.stdout.slice(0, OUTPUT_MAX);

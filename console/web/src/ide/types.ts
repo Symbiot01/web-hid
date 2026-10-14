@@ -7,11 +7,16 @@ export type EditorTab = {
 
 export type TestStatus = 'idle' | 'pass' | 'fail';
 
+export type TestReason = 'timeout' | 'output_limit' | 'runtime' | null;
+
 export type TestCase = {
   id: string;
   input: string;
   expected: string;
   actual: string;
+  stderr?: string;
+  reason?: TestReason;
+  timeMs?: number;
   status: TestStatus;
 };
 
@@ -19,18 +24,39 @@ export type AgentMode = 'ask' | 'agent';
 
 export type AgentPhase = 'idle' | 'working' | 'needs_human' | 'solved' | 'blocked';
 
+export type AgentStep = 'idle' | 'identify' | 'cases' | 'harness' | 'solve' | 'test' | 'done';
+
+export type AgentKind = 'user' | 'problem' | 'plan' | 'step';
+
 export type AgentMessage = {
   id: string;
   role: 'user' | 'assistant';
   text: string;
+  kind?: AgentKind;
 };
 
 export type AgentView = {
   configured: boolean;
   phase: AgentPhase;
-  messages: Array<{ role: 'user' | 'assistant'; text: string }>;
+  step?: AgentStep;
+  attempt?: number;
+  maxAttempts?: number;
+  title?: string;
+  entry?: string;
+  signature?: string;
+  format?: string;
+  messages: Array<{ role: 'user' | 'assistant'; text: string; kind?: AgentKind }>;
   source: string | null;
-  cases: Array<{ id: string; input: string; expected: string; actual: string; status: TestStatus }>;
+  cases: Array<{
+    id: string;
+    input: string;
+    expected: string;
+    actual: string;
+    stderr?: string;
+    reason?: TestReason;
+    timeMs?: number;
+    status: TestStatus;
+  }>;
   output: string;
 };
 
