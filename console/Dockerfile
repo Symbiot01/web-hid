@@ -5,7 +5,7 @@ WORKDIR /app/web
 COPY web/package.json web/package-lock.json* ./
 # Coolify often sets NODE_ENV=production; still need vite/typescript to build.
 ENV NODE_ENV=development
-RUN npm ci
+RUN npm ci --include=dev
 COPY web/ ./
 RUN npm run build
 
