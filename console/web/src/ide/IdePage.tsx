@@ -117,6 +117,10 @@ export function IdePage({ busy, onLogout }: Props) {
   const [snapNote, setSnapNote] = useState('');
   const [hidPlay, setHidPlay] = useState<HidPlay | null>(null);
   const [incomingFiles, setIncomingFiles] = useState<File[]>([]);
+  const videoGrabberRef = useRef<(() => Promise<Blob | null>) | null>(null);
+  const bindVideoGrabber = useCallback((fn: (() => Promise<Blob | null>) | null) => {
+    videoGrabberRef.current = fn;
+  }, []);
   const hid = useHidLink({
     connect: bottomTab === 'hid' || hidContinuous || liveMode !== null,
     watch: bottomTab === 'hid' || hidContinuous || liveMode !== null,
@@ -275,28 +279,65 @@ export function IdePage({ busy, onLogout }: Props) {
     setIncomingFiles((prev) => [...prev, file]);
   }
 
-  async function snap(kind: 'frame' | 'agent') {
-    setSnapNote(kind === 'frame' ? 'Saving frame…' : 'Asking the capture agent…');
+  async function snap(
+    kind: 'frame' | 'agent',
+    target: 'agent' | 'save' = 'agent',
+    resetFirst = false,
+  ): Promise<string> {
+    const startMsg =
+      kind === 'frame'
+        ? target === 'agent'
+          ? 'Snapping stream frame to Agent…'
+          : 'Saving stream frame…'
+        : target === 'agent'
+          ? 'Snapping via capture agent to Agent…'
+          : 'Asking capture agent…';
+    setSnapNote(startMsg);
     try {
-      const response = await fetch(kind === 'frame' ? '/api/capture/frame' : '/api/capture/snap', {
-        method: 'POST',
-        credentials: 'same-origin',
-      });
-      if (!response.ok) {
-        const body = (await response.json().catch(() => ({}))) as { error?: string };
-        setSnapNote(body.error || 'Snap failed');
-        return;
+      let blob: Blob | null = null;
+      let sourceLabel = kind === 'frame' ? 'RTSP frame' : 'Capture agent';
+      if (kind === 'frame' && videoGrabberRef.current) {
+        blob = await videoGrabberRef.current();
+        if (blob) sourceLabel = 'Live stream PNG';
       }
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = kind === 'frame' ? 'frame.jpg' : 'capture.jpg';
-      anchor.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1500);
-      setSnapNote(kind === 'frame' ? 'Saved frame.jpg' : 'Saved capture.jpg');
+      if (!blob) {
+        const response = await fetch(kind === 'frame' ? '/api/capture/frame' : '/api/capture/snap', {
+          method: 'POST',
+          credentials: 'same-origin',
+        });
+        if (!response.ok) {
+          const body = (await response.json().catch(() => ({}))) as { error?: string };
+          const err = body.error || 'Snap failed';
+          setSnapNote(err);
+          return err;
+        }
+        blob = await response.blob();
+      }
+      const ext = blob.type === 'image/png' ? 'png' : 'jpg';
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(11, 19);
+      const prefix = kind === 'frame' ? 'frame' : 'capture';
+      const filename = `${prefix}-${stamp}.${ext}`;
+      if (target === 'save') {
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = filename;
+        anchor.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1500);
+        const msg = `Saved ${filename} (${sourceLabel})`;
+        setSnapNote(msg);
+        return msg;
+      }
+      const file = new File([blob], filename, { type: blob.type || 'image/jpeg' });
+      attachToAgent(file, resetFirst);
+      const msg = resetFirst
+        ? `New problem with ${filename} (${sourceLabel})`
+        : `Attached ${filename} to Agent (${sourceLabel})`;
+      setSnapNote(msg);
+      return msg;
     } catch {
       setSnapNote('Snap failed');
+      return 'Snap failed';
     }
   }
 
@@ -636,10 +677,8 @@ export function IdePage({ busy, onLogout }: Props) {
                 liveMode={liveMode}
                 onLive={enterLive}
                 onLeaveLive={leaveLive}
-                onSnap={(kind) => {
-                  void snap(kind);
-                }}
-                onAttachAgent={attachToAgent}
+                onSnap={snap}
+                onBindVideoGrabber={bindVideoGrabber}
                 sendFrame={hid.sendFrame}
                 snapNote={snapNote}
                 onClearNote={() => setSnapNote('')}
@@ -654,7 +693,7 @@ export function IdePage({ busy, onLogout }: Props) {
                 stream={cameraStream}
                 onStream={setCameraStream}
                 onOpenStream={() => setEditorView('stream')}
-                onAttachAgent={attachToAgent}
+                onSnap={snap}
                 continuous={hidContinuous}
                 liveMode={liveMode}
                 onContinuous={(enabled) => {

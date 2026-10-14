@@ -155,16 +155,22 @@ function sourceHasEntry(source, entry) {
   const name = entryFunction(entry);
   const raw = typeof source === 'string' ? source : '';
   const clean = stripCommentsAndStrings(raw);
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const mainFn = extractFunctionBody(clean, 'main');
   if (!mainFn) {
-    return new RegExp(`\\b${name}\\s*\\(`).test(clean) && /\bmain\b/.test(clean);
+    return new RegExp(`\\b${escaped}\\b`).test(clean) && /\bmain\b/.test(clean);
   }
   const outsideMain = `${clean.slice(0, mainFn.start)}\n${clean.slice(mainFn.end)}`;
+  const isClassOrStruct = new RegExp(`\\b(?:class|struct)\\s+${escaped}\\b`).test(outsideMain);
+  if (isClassOrStruct) {
+    const usedInMain = new RegExp(`\\b${escaped}\\b`).test(mainFn.body);
+    return usedInMain;
+  }
   const entryFn = extractFunctionBody(outsideMain, name);
   if (!entryFn) {
-    return new RegExp(`\\b${name}\\s*\\(`).test(outsideMain);
+    return new RegExp(`\\b${escaped}\\s*\\(`).test(outsideMain);
   }
-  const callRegex = new RegExp(`\\b${name}\\s*\\(`);
+  const callRegex = new RegExp(`\\b${escaped}\\s*\\(`);
   if (!callRegex.test(mainFn.body) && !callRegex.test(outsideMain.slice(entryFn.end))) {
     return false;
   }
@@ -474,11 +480,17 @@ function promptFor(task, context) {
         'Reply with JSON only: {"title":"","statement":"","casesFromProblem":false,"cases":[{"input":"","expected":""}],"plan":"","functionName":"","signature":"","format":""}.',
         '- title: short problem title (e.g. "Median of Two Sorted Arrays", "Shortest Routes I").',
         '- statement: complete, clean problem statement combining all parts, including input/output rules, constraints, and edge conditions. If a starter code template or class/function stub is shown in the prompt, screenshot, or editor, include that template signature in statement.',
-        '- casesFromProblem / cases: copy all sample inputs and outputs verbatim across all provided screenshots/context ONLY when shown in the problem. If none are shown, set casesFromProblem to false and cases to []. Never guess or invent sample outputs here.',
+        '- casesFromProblem / cases: extract all sample inputs and outputs across all provided screenshots/context ONLY when shown in the problem. If none are shown, set casesFromProblem to false and cases to []. Never guess or invent sample outputs here.',
+        '- Agentic Bare-Bones Competitive Programming Format (MANDATORY):',
+        '  * Convert every sample `input` and `expected` output into clean, bare-bones competitive programming stdin/stdout so `cin >>` can read it directly without string/bracket parsing:',
+        '  * 1D Arrays & Scalars: Strip variable labels (`arr[] =`, `nums1 =`, `target =`, `s =`), brackets `[...]`, `{...}`, quotes `"..."`, and commas. Prefix every 1D array with its length `n` on a line followed by `n` space-separated elements on the next line (unless `n` is already given immediately before it). Example: `arr[] = [1, 2, 3, 4, 5]` -> `"5\\n1 2 3 4 5\\n"`; `nums = [2,7,11,15], target = 9` -> `"4\\n2 7 11 15\\n9\\n"`.',
+        '  * 2D Arrays / Grids: Convert `[[1,2,3],[4,5,6]]` into `"2 3\\n1 2 3\\n4 5 6\\n"` (`rows cols` followed by each row).',
+        '  * Query / Class-Design Problems (e.g. `["RandomizedCollection", "insert", "remove", "getRandom"]` with `[[], [1], [1], []]`, or `LRUCache`, `Trie`, `MinStack`): Convert the parallel command/argument arrays into bare-bones query lines: first line is the operation count `q` (plus any constructor args if needed), followed by `q` lines of `op arg1 arg2...` (e.g. `"6\\ninsert 1\\ninsert 1\\ninsert 2\\ngetRandom\\nremove 1\\ngetRandom\\n"`), and bare expected outputs (e.g. `"true false true 2 true 1\\n"` or one result per query).',
+        '  * Expected Outputs: Strip outer `[` `]`, quotes, and commas into bare space- or newline-separated tokens (e.g. `[0, 1]` -> `"0 1\\n"`).',
         '- Template vs. Standard Competitive Programming rule:',
-        '  1. IF a starter template / function signature is given in the problem or screenshot (e.g. LeetCode/HackerRank `class Solution` with `findMedianSortedArrays`, `threeSum`, `reverseKGroup`, or a custom starter function in the editor): conform strictly to that template — set `functionName` to that exact method/function name and `signature` to its exact C++17 signature.',
+        '  1. IF a starter template / function or class signature is given in the problem or screenshot (e.g. LeetCode/HackerRank `class Solution` with `findMedianSortedArrays`, or an OOP design class like `class RandomizedCollection` / `class LRUCache`): conform strictly to that template — set `functionName` to that exact method or class name and `signature` to its exact C++17 signature.',
         '  2. OTHERWISE (standard stdin/stdout competitive programming like Codeforces, AtCoder, CSES, ICPC, or no template given): ALWAYS set `functionName` to `"solve"` and `signature` to `"void solve()"` (never `void solve(istream&, ostream&)`). In Codeforces style, `void solve()` reads directly from `cin` and writes directly to `cout`.',
-        '- format: precise description of the exact case input syntax (e.g. raw whitespace-separated numbers with testcase count `t`, or labeled assignments `nums1 = [1,3], nums2 = [2]`, `grid = [[1,0],[0,1]]`) and exact expected output syntax (e.g. newline-separated answers, `YES`/`NO`, fixed 5 decimals `2.00000`, or `[a,b]`).',
+        '- format: precise description of the bare-bones stdin token order (e.g. "Line 1: n. Line 2: n space-separated integers." or "Line 1: q. Next q lines: operation name followed by its arguments.") and bare-bones stdout format.',
         '- plan: 1-2 sentences stating the optimal algorithm and its time and space complexity.',
       ].join('\n'),
       user: `Problem text:\n${clip(context.text, 12_000)}${prior}\n\nCurrent editor file:\n${source}`,
@@ -486,8 +498,12 @@ function promptFor(task, context) {
   }
   if (task === 'review') {
     return {
-      system:
-        'You verify sample test cases by hand against the problem statement. Do not write a program. Reply with JSON only: {"ok":true,"reason":""}. Set ok to false only when a sample expected output contradicts the problem statement.',
+      system: [
+        'You verify sample test cases by hand against the problem statement. Do not write a program. Reply with JSON only: {"ok":true,"reason":""}.',
+        '- Note that Cases may be formatted in bare-bones competitive programming stdin/stdout (e.g. array size `n` followed by elements, or `q` lines of `op arg` queries without `null` for constructor).',
+        '- If an operation is randomized (e.g. `getRandom()`) or the problem allows multiple valid answers ("return any valid..."), set `ok` to `true` as long as the expected output is a valid possible outcome.',
+        '- Set `ok` to `false` ONLY when a sample expected output is mathematically impossible under the problem statement.',
+      ].join('\n'),
       user: `Statement:\n${statement}\n\nCases:\n${cases}`,
     };
   }
@@ -497,10 +513,10 @@ function promptFor(task, context) {
       system: [
         hasExisting
           ? 'Generate 3 to 4 NEW, thorough edge and stress test cases that are NOT duplicates of Existing cases.'
-          : 'Generate 4 thorough stdin/stdout test cases for this problem, covering a basic case, boundary/minimal case, tricky edge case, and stress pattern.',
+          : 'Generate 4 thorough bare-bones stdin/stdout test cases for this problem, covering a basic case, boundary/minimal case, tricky edge case, and stress pattern.',
         'Reply with JSON only: {"cases":[{"input":"","expected":""}]}.',
         'Mandatory test-case rules:',
-        '1. Every `input` and `expected` string MUST strictly follow the exact syntax, variable labels, bracket style, and decimal precision shown in Format and Existing cases (for example, if Existing cases use raw numbers or `nums1 = [1,3], nums2 = [2]`, every new case MUST match that exact style).',
+        '1. Every `input` and `expected` string MUST strictly follow the bare-bones competitive programming stdin/stdout format described in Format and Existing cases (no variable labels `arr[] =`, no brackets `[...]`, no commas; prefix arrays with size `n` and write query problems as `q` lines of `op args...`).',
         '2. Cover diverse edge conditions: empty/single-element inputs, negative numbers, zeros, duplicates, odd vs even lengths, already-sorted vs reverse-sorted, and boundary values allowed by the statement.',
         '3. Trace the problem rules carefully by hand for each new input so every `expected` output is 100% mathematically correct.',
       ].join('\n'),
@@ -510,7 +526,7 @@ function promptFor(task, context) {
   if (task === 'harness') {
     return {
       system: [
-        'Write a clean, minimal C++17 test harness (`int main()`) and a compilable stub for the target function.',
+        'Write a clean, minimal C++17 test harness (`int main()`) and a compilable stub for the target function or class.',
         'Reply with JSON only: {"source":""}.',
         'Header & style rules (mandatory):',
         '- ALWAYS start with `#include <bits/stdc++.h>` and `using namespace std;` instead of listing multiple individual standard library headers.',
@@ -519,10 +535,9 @@ function promptFor(task, context) {
         `- Mode A — Standard Competitive Programming (\`${entry}\` is \`solve\` and signature is \`void solve()\`):`,
         '  * Write `void solve() {}` above `main()` (it takes NO parameters — never `istream&` or `ostream&` — and will use `cin` and `cout` directly).',
         '  * Keep `main()` minimal in classic Codeforces style (`ios_base::sync_with_stdio(false); cin.tie(nullptr);`, and either call `solve();` directly or `int t; if (cin >> t) while (t--) solve();` depending on whether the problem has multiple test cases per input).',
-        `- Mode B — Template / Function Signature Given (\`${signature}\` has parameters or a return value, e.g. LeetCode):`,
-        `  * Include any required structs (\`ListNode\`, \`TreeNode\` if used in \`${signature}\`) and the function \`${signature}\` (or \`class Solution\` method + thin wrapper) with a minimal placeholder return so it compiles.`,
-        `  * In \`main()\`, parse one test case from \`cin\` matching the exact format of Cases, call \`${entry}\`, and print the result to \`cout\` matching the exact format of Cases.`,
-        '  * For labeled inputs (`nums1 = [1,3], nums2 = [2]`, `s1 = "abc"`): NEVER parse digits from variable names (`nums1` has `1`, `nums2` has `2`!). Advance past `=` before parsing each argument, and handle `[]`, negative numbers, `[[...]]`, and `"..."` cleanly.',
+        `- Mode B — Template Function or Class Given (\`${signature}\` has parameters/return value or is a class like \`${entry}\`):`,
+        `  * Include any required structs (\`ListNode\`, \`TreeNode\` if used in \`${signature}\`) and the function/class \`${signature}\` with minimal placeholder returns so it compiles.`,
+        `  * Test cases are in bare-bones competitive programming stdin format (e.g. \`5\\n1 2 3 4 5\\n\` for arrays, or \`q\` lines of \`op args...\` for query/class problems). In \`main()\`, read inputs directly using clean \`cin >>\` loops, call \`${entry}\` (or instantiate \`${entry}\` and dispatch queries), and print the bare result to \`cout\` matching Cases.`,
       ].join('\n'),
       user: `Statement:\n${statement}\n\nTarget function:\n${entry}\n\nSignature:\n${signature}\n\nSample format:\n${format}\n\nCases:\n${cases}`,
     };
@@ -535,12 +550,12 @@ function promptFor(task, context) {
         'Code style & structure rules (mandatory):',
         '1. Header: ALWAYS use `#include <bits/stdc++.h>` and `using namespace std;` at the top instead of listing individual standard headers (`<iostream>`, `<vector>`, `<algorithm>`, etc.).',
         '2. Template conformance vs. `void solve()`:',
-        `   - If a specific function/class template was given (\`${signature}\` with parameters/return type): conform to that signature, put the algorithm inside \`${entry}\`, and keep \`main()\` at the bottom strictly as the test wrapper that parses \`cin\`, calls \`${entry}\`, and prints to \`cout\`.`,
+        `   - If a specific function or class template was given (\`${signature}\`): conform to that signature, put the algorithm inside \`${entry}\`, and keep \`main()\` at the bottom strictly as the test wrapper that parses bare-bones \`cin\`, calls/dispatches \`${entry}\`, and prints to \`cout\`.`,
         '   - Otherwise (standard competitive programming / Codeforces style): use `void solve()` with NO parameters (never `istream& in, ostream& out`). Read input directly from `cin` and print output directly to `cout` inside `solve()` (or per-testcase inside `solve()` with `int t; cin >> t; while (t--) solve();` in `main()`).',
         '3. Keep the code as simple, direct, and readable as possible — avoid over-engineering, unnecessary boilerplate, or stream-passing abstractions.',
-        '4. If Cases use labeled inputs (`nums1 = [1,3], nums2 = [2]`, `s1 = "ab"`), never parse digits inside variable names (`1` in `nums1`); parse only values after `=`. Handle empty arrays `[]`, negative integers, 2D arrays `[[...]]`, and `null` tree nodes properly.',
+        '4. Cases use bare-bones whitespace-separated stdin (e.g. array size `n` followed by `n` space-separated elements `5\\n1 2 3 4 5\\n`, or `q` lines of `op arg...` for query/class problems). Read inputs with simple `cin >>` in `main()` (for template functions/classes) or `solve()`, and print bare space/newline-separated output matching Cases.',
         '5. Handle algorithmic edge cases: `long long` for 64-bit sums/products/distances, 1-based vs 0-based indexing, empty/single-element inputs, duplicates, and boundary constraints.',
-        '6. Match the exact expected output format (`fixed << setprecision(...)`, `[a,b]`, `YES`/`NO`, or `\\n`-separated answers).',
+        '6. Match the exact expected output format (`fixed << setprecision(...)`, `true`/`false`, `YES`/`NO`, or space/newline-separated answers).',
         '7. Format across multiple lines with 2-space indentation. Do not open files, spawn processes, or use the network. `approach` is 1-2 concise sentences stating the algorithm and time/space complexity.',
       ].join('\n'),
       user: `Statement:\n${statement}\n\nFunction:\n${entry}\n\nSignature:\n${signature}\n\nSample format:\n${format}\n\nCases:\n${cases}\n\nApproach:\n${hint || 'Use the simplest optimal algorithm that handles all constraints and edge cases.'}\n\nPrevious source:\n${source}\n\nPrevious result:\n${failure}`,
@@ -1058,7 +1073,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
           timeMs: 0,
           status: 'idle',
         }));
-        say(`Loaded ${state.cases.length} sample case${state.cases.length === 1 ? '' : 's'} from the problem. Verifying by hand.`);
+        say(`Loaded ${state.cases.length} sample case${state.cases.length === 1 ? '' : 's'} (bare-bones stdin format). Verifying by hand.`);
         const checked = await reviewCases();
         if (!checked.ok) {
           state.phase = 'blocked';
@@ -1071,7 +1086,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
         }
         state.casesVerified = true;
       } else {
-        say('No sample cases in the problem. Generating test cases from the statement.');
+        say('No sample cases in the problem. Generating bare-bones test cases from the statement.');
         const made = await talk('makeCases', { statement: state.statement, format: state.format, cases: [] });
         if (!validCases(made.cases)) refuse(502, 'The model reply was not usable');
         state.cases = made.cases.slice(0, 4).map((item) => ({

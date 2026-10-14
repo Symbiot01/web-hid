@@ -15,7 +15,8 @@ type Props = {
   onLive: (mode: LiveMode) => void;
   onLeave: () => void;
   sendFrame: (buf: ArrayBuffer | null) => boolean;
-  onAttachAgent: (file: File, resetFirst: boolean) => void;
+  onSnap: (kind: 'frame' | 'agent', target?: 'agent' | 'save', resetFirst?: boolean) => Promise<string>;
+  onBindVideoGrabber: (fn: (() => Promise<Blob | null>) | null) => void;
 };
 
 export function StreamPane({
@@ -26,14 +27,15 @@ export function StreamPane({
   onLive,
   onLeave,
   sendFrame,
-  onAttachAgent,
+  onSnap,
+  onBindVideoGrabber,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [status, setStatus] = useState<Status>('offline');
   const [detail, setDetail] = useState('No signal');
   const [nonce, setNonce] = useState(0);
   const [busyCmd, setBusyCmd] = useState(false);
-  const [capturing, setCapturing] = useState<'save' | 'agent' | null>(null);
+  const [capturing, setCapturing] = useState<string | null>(null);
   const [brightness, setBrightness] = useState(35);
   const [showPicture, setShowPicture] = useState(false);
   const [resetOnCapture, setResetOnCapture] = useState(false);
@@ -46,6 +48,24 @@ export function StreamPane({
   streamRef.current = stream;
   liveRef.current = liveMode;
   sendRef.current = sendFrame;
+
+  useEffect(() => {
+    onBindVideoGrabber(async () => {
+      const video = videoRef.current;
+      if (!video || video.readyState < 2 || video.videoWidth <= 0 || video.videoHeight <= 0) {
+        return null;
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+      return blob && blob.size > 0 ? blob : null;
+    });
+    return () => onBindVideoGrabber(null);
+  }, [onBindVideoGrabber]);
 
   useEffect(() => {
     if (!active) return;
@@ -240,75 +260,20 @@ export function StreamPane({
     }
   }
 
-  async function grabBestQualityBlob(): Promise<{ blob: Blob; sourceLabel: string } | null> {
-    const video = videoRef.current;
-    if (video && video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
-        if (blob && blob.size > 0) {
-          return { blob, sourceLabel: `${canvas.width}×${canvas.height} PNG` };
-        }
-      }
-    }
-    try {
-      const frameRes = await fetch('/api/capture/frame', { method: 'POST', credentials: 'same-origin' });
-      if (frameRes.ok) {
-        const blob = await frameRes.blob();
-        if (blob.size > 0) return { blob, sourceLabel: 'RTSP JPEG' };
-      }
-    } catch {
-      // try capture agent next
-    }
-    try {
-      const snapRes = await fetch('/api/capture/snap', { method: 'POST', credentials: 'same-origin' });
-      if (snapRes.ok) {
-        const blob = await snapRes.blob();
-        if (blob.size > 0) return { blob, sourceLabel: 'Agent JPEG' };
-      }
-    } catch {
-      // return null
-    }
-    return null;
-  }
-
-  async function handleCapture(target: 'save' | 'agent') {
+  async function runSnap(kind: 'frame' | 'agent', target: 'agent' | 'save') {
     if (capturing) return;
-    setCapturing(target);
-    setNote(target === 'agent' ? 'Capturing to Agent…' : 'Capturing to disk…');
+    const key = `${kind}-${target}`;
+    setCapturing(key);
     try {
-      const result = await grabBestQualityBlob();
-      if (!result) {
-        setNote('Capture failed (no video or server frame)');
-        return;
-      }
-      const ext = result.blob.type === 'image/png' ? 'png' : 'jpg';
-      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(11, 19);
-      const filename = `capture-${stamp}.${ext}`;
-      if (target === 'save') {
-        const url = URL.createObjectURL(result.blob);
-        const anchor = document.createElement('a');
-        anchor.href = url;
-        anchor.download = filename;
-        anchor.click();
-        window.setTimeout(() => URL.revokeObjectURL(url), 1500);
-        setNote(`Saved ${filename} (${result.sourceLabel})`);
-      } else {
-        const file = new File([result.blob], filename, { type: result.blob.type || 'image/png' });
-        const shouldReset = resetOnCapture;
-        onAttachAgent(file, shouldReset);
+      const shouldReset = target === 'agent' && resetOnCapture;
+      const resultMsg = await onSnap(kind, target, shouldReset);
+      setNote(resultMsg);
+      if (target === 'agent' && !resultMsg.toLowerCase().includes('failed')) {
         if (shouldReset) {
           setResetOnCapture(false);
           setCapturedCount(1);
-          setNote(`Started new problem with ${filename} (${result.sourceLabel})`);
         } else {
-          const nextCount = capturedCount + 1;
-          setCapturedCount(nextCount);
-          setNote(`Queued #${nextCount} in Agent (${result.sourceLabel})`);
+          setCapturedCount((prev) => prev + 1);
         }
       }
     } finally {
@@ -336,19 +301,39 @@ export function StreamPane({
             type="button"
             className="btn primary ide-mini"
             disabled={capturing !== null}
-            onClick={() => void handleCapture('agent')}
-            title="Capture lossless frame and attach to Agent pane"
+            onClick={() => void runSnap('frame', 'agent')}
+            title="Snap Frame: grab frame from live stream (or RTSP) and attach directly to Agent"
           >
-            {capturing === 'agent' ? 'Capturing…' : `+ Capture to Agent${capturedCount > 0 ? ` (${capturedCount})` : ''}`}
+            {capturing === 'frame-agent'
+              ? 'Snapping…'
+              : `+ Snap Frame → Agent${capturedCount > 0 ? ` (${capturedCount})` : ''}`}
+          </button>
+          <button
+            type="button"
+            className="btn primary ide-mini"
+            disabled={capturing !== null}
+            onClick={() => void runSnap('agent', 'agent')}
+            title="Snap Agent: ask the remote Capture Agent for a high-res photo and attach directly to Agent"
+          >
+            {capturing === 'agent-agent' ? 'Snapping…' : '+ Snap Agent → Agent'}
           </button>
           <button
             type="button"
             className="btn ghost ide-mini"
             disabled={capturing !== null}
-            onClick={() => void handleCapture('save')}
-            title="Download full-resolution capture to your computer"
+            onClick={() => void runSnap('frame', 'save')}
+            title="Download stream frame to disk"
           >
-            {capturing === 'save' ? 'Saving…' : 'Save Local'}
+            {capturing === 'frame-save' ? 'Saving…' : 'Save Frame'}
+          </button>
+          <button
+            type="button"
+            className="btn ghost ide-mini"
+            disabled={capturing !== null}
+            onClick={() => void runSnap('agent', 'save')}
+            title="Download capture agent photo to disk"
+          >
+            {capturing === 'agent-save' ? 'Saving…' : 'Save Agent'}
           </button>
           <label className="ide-stream-hud-check" title="Reset Agent problem before attaching the next capture">
             <input

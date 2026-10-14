@@ -20,7 +20,7 @@ type Props = {
   stream: 2 | 3;
   onStream: (stream: 2 | 3) => void;
   onOpenStream: () => void;
-  onAttachAgent: (file: File, resetFirst: boolean) => void;
+  onSnap: (kind: 'frame' | 'agent', target?: 'agent' | 'save', resetFirst?: boolean) => Promise<string>;
   continuous: boolean;
   liveMode: LiveMode | null;
   onContinuous: (enabled: boolean) => void;
@@ -42,7 +42,7 @@ export function TerminalPane({
   stream,
   onStream,
   onOpenStream,
-  onAttachAgent,
+  onSnap,
   continuous,
   liveMode,
   onContinuous,
@@ -97,7 +97,7 @@ export function TerminalPane({
           stream={stream}
           onStream={onStream}
           onOpenStream={onOpenStream}
-          onAttachAgent={onAttachAgent}
+          onSnap={onSnap}
         />
       </div>
       <div className={tab === 'hid' ? 'ide-fill' : 'ide-hidden'}>

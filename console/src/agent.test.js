@@ -68,6 +68,13 @@ test('parses model JSON and checks image bytes', () => {
   assert.equal(wantsMoreCases('add few more test cases from your side to do even more thorough testing'), true);
   assert.equal(wantsMoreCases('', 'more_cases'), true);
   assert.equal(wantsMoreCases('use dynamic programming instead'), false);
+  assert.equal(
+    sourceHasEntry(
+      'class RandomizedCollection { public: RandomizedCollection(){} bool insert(int v){return true;} };\nint main(){ RandomizedCollection rc; rc.insert(1); return 0; }\n',
+      'RandomizedCollection',
+    ),
+    true,
+  );
 });
 
 test('solved run writes the source and does not reveal the key', async () => {

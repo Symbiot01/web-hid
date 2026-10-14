@@ -71,14 +71,15 @@ type Props = {
   stream: 2 | 3;
   onStream: (stream: 2 | 3) => void;
   onOpenStream: () => void;
-  onAttachAgent: (file: File, resetFirst: boolean) => void;
+  onSnap: (kind: 'frame' | 'agent', target?: 'agent' | 'save', resetFirst?: boolean) => Promise<string>;
 };
 
-export function CameraPanel({ active, stream, onStream, onOpenStream, onAttachAgent }: Props) {
+export function CameraPanel({ active, stream, onStream, onOpenStream, onSnap }: Props) {
   const [status, setStatus] = useState<CameraStatus | null>(null);
-  const [output, setOutput] = useState('Ready. Use the top cards to reconnect, flip, adjust brightness, or capture.');
+  const [output, setOutput] = useState('Ready. Use the top bar to Snap Frame or Snap Agent directly into the Agent pane.');
   const [busy, setBusy] = useState(false);
-  const [capturing, setCapturing] = useState<'save' | 'agent' | null>(null);
+  const [capturing, setCapturing] = useState<string | null>(null);
+  const [resetOnCapture, setResetOnCapture] = useState(false);
   const [alarm, setAlarm] = useState<AlarmForm>(EMPTY_ALARM);
   const [led, setLed] = useState<LedForm>(EMPTY_LED);
   const [saturation, setSaturation] = useState(30);
@@ -165,39 +166,17 @@ export function CameraPanel({ active, stream, onStream, onOpenStream, onAttachAg
     );
   };
 
-  async function captureServerFrame(target: 'save' | 'agent') {
+  async function runSnap(kind: 'frame' | 'agent', target: 'agent' | 'save') {
     if (capturing) return;
-    setCapturing(target);
+    const key = `${kind}-${target}`;
+    setCapturing(key);
     try {
-      let res = await fetch('/api/capture/frame', { method: 'POST', credentials: 'same-origin' });
-      let sourceLabel = 'RTSP frame';
-      if (!res.ok) {
-        res = await fetch('/api/capture/snap', { method: 'POST', credentials: 'same-origin' });
-        sourceLabel = 'Capture agent';
+      const shouldReset = target === 'agent' && resetOnCapture;
+      const msg = await onSnap(kind, target, shouldReset);
+      setOutput(msg);
+      if (shouldReset && !msg.toLowerCase().includes('failed')) {
+        setResetOnCapture(false);
       }
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        setOutput(body.error || 'Capture failed');
-        return;
-      }
-      const blob = await res.blob();
-      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(11, 19);
-      const filename = `capture-${stamp}.jpg`;
-      if (target === 'save') {
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement('a');
-        anchor.href = url;
-        anchor.download = filename;
-        anchor.click();
-        window.setTimeout(() => URL.revokeObjectURL(url), 1500);
-        setOutput(`Saved ${filename} (${sourceLabel})`);
-      } else {
-        const file = new File([blob], filename, { type: blob.type || 'image/jpeg' });
-        onAttachAgent(file, false);
-        setOutput(`Attached ${filename} to Agent pane (${sourceLabel})`);
-      }
-    } catch {
-      setOutput('Capture failed');
     } finally {
       setCapturing(null);
     }
@@ -209,6 +188,58 @@ export function CameraPanel({ active, stream, onStream, onOpenStream, onAttachAg
 
   return (
     <aside className="ide-cam">
+      <section className="ide-cam-card" aria-label="Snap Frame and Snap Agent">
+        <div className="ide-hid-head">
+          <strong className="ide-cam-card-title">Capture & Send Directly to Agent</strong>
+          <label className="ide-check" title="Reset Agent problem before attaching the next capture">
+            <input
+              type="checkbox"
+              checked={resetOnCapture}
+              onChange={(event) => setResetOnCapture(event.target.checked)}
+            />
+            Start new problem on capture
+          </label>
+        </div>
+        <div className="ide-cam-actions" style={{ marginBottom: 0 }}>
+          <button
+            type="button"
+            className="btn primary ide-mini"
+            disabled={capturing !== null}
+            onClick={() => void runSnap('frame', 'agent')}
+            title="Grab still frame from live stream / RTSP and attach directly to Agent pane"
+          >
+            {capturing === 'frame-agent' ? 'Snapping Frame…' : '+ Snap Frame → Agent'}
+          </button>
+          <button
+            type="button"
+            className="btn primary ide-mini"
+            disabled={capturing !== null}
+            onClick={() => void runSnap('agent', 'agent')}
+            title="Trigger remote Capture Agent still photo and attach directly to Agent pane"
+          >
+            {capturing === 'agent-agent' ? 'Snapping Agent…' : '+ Snap Agent → Agent'}
+          </button>
+          <button
+            type="button"
+            className="btn ghost ide-mini"
+            disabled={capturing !== null}
+            onClick={() => void runSnap('frame', 'save')}
+            title="Download live stream / RTSP frame to disk"
+          >
+            {capturing === 'frame-save' ? 'Saving…' : 'Snap Frame (Save Local)'}
+          </button>
+          <button
+            type="button"
+            className="btn ghost ide-mini"
+            disabled={capturing !== null}
+            onClick={() => void runSnap('agent', 'save')}
+            title="Download remote Capture Agent photo to disk"
+          >
+            {capturing === 'agent-save' ? 'Saving…' : 'Snap Agent (Save Local)'}
+          </button>
+        </div>
+      </section>
+
       <div className="ide-cam-grid">
         <section className="ide-cam-card" aria-label="Connection and Recovery">
           <div className="ide-hid-head">
@@ -236,7 +267,7 @@ export function CameraPanel({ active, stream, onStream, onOpenStream, onAttachAg
           </div>
           <div className="ide-cam-tier">
             <span className="ide-hid-label">Reconnect & Recovery</span>
-            <div className="ide-cam-actions">
+            <div className="ide-cam-actions" style={{ marginBottom: 0 }}>
               <button
                 type="button"
                 className="btn primary ide-mini"
@@ -261,27 +292,6 @@ export function CameraPanel({ active, stream, onStream, onOpenStream, onAttachAg
                 title="Tell camera bridge to reset UDP session"
               >
                 3. Recover Bridge
-              </button>
-            </div>
-          </div>
-          <div className="ide-cam-tier">
-            <span className="ide-hid-label">Capture</span>
-            <div className="ide-cam-actions">
-              <button
-                type="button"
-                className="btn primary ide-mini"
-                disabled={capturing !== null}
-                onClick={() => void captureServerFrame('agent')}
-              >
-                {capturing === 'agent' ? 'Capturing…' : '+ Capture to Agent'}
-              </button>
-              <button
-                type="button"
-                className="btn ghost ide-mini"
-                disabled={capturing !== null}
-                onClick={() => void captureServerFrame('save')}
-              >
-                {capturing === 'save' ? 'Saving…' : 'Save Local'}
               </button>
             </div>
           </div>
@@ -345,7 +355,7 @@ export function CameraPanel({ active, stream, onStream, onOpenStream, onAttachAg
               />
             </label>
           </div>
-          <div className="ide-cam-actions">
+          <div className="ide-cam-actions" style={{ marginBottom: 0 }}>
             {[20, 40, 60, 80].map((preset) => (
               <button
                 key={preset}

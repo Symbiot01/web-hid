@@ -27,8 +27,8 @@ type Props = {
   liveMode: LiveMode | null;
   onLive: (mode: LiveMode) => void;
   onLeaveLive: () => void;
-  onSnap: (kind: 'frame' | 'agent') => void;
-  onAttachAgent: (file: File, resetFirst: boolean) => void;
+  onSnap: (kind: 'frame' | 'agent', target?: 'agent' | 'save', resetFirst?: boolean) => Promise<string>;
+  onBindVideoGrabber: (fn: (() => Promise<Blob | null>) | null) => void;
   sendFrame: (buf: ArrayBuffer | null) => boolean;
   snapNote: string;
   onClearNote: () => void;
@@ -56,7 +56,7 @@ export function EditorPane({
   onLive,
   onLeaveLive,
   onSnap,
-  onAttachAgent,
+  onBindVideoGrabber,
   sendFrame,
   snapNote,
   onClearNote,
@@ -272,10 +272,10 @@ export function EditorPane({
               className="ide-menu-item"
               onClick={() => {
                 closeMenu();
-                onSnap('frame');
+                void onSnap('frame', 'agent');
               }}
             >
-              Snap frame
+              Snap frame → Agent
             </button>
             <button
               type="button"
@@ -283,10 +283,32 @@ export function EditorPane({
               className="ide-menu-item"
               onClick={() => {
                 closeMenu();
-                onSnap('agent');
+                void onSnap('agent', 'agent');
               }}
             >
-              Snap agent
+              Snap agent → Agent
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="ide-menu-item"
+              onClick={() => {
+                closeMenu();
+                void onSnap('frame', 'save');
+              }}
+            >
+              Snap frame (save)
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="ide-menu-item"
+              onClick={() => {
+                closeMenu();
+                void onSnap('agent', 'save');
+              }}
+            >
+              Snap agent (save)
             </button>
             {snapNote && menu ? <p className="ide-menu-note">{snapNote}</p> : null}
           </div>
@@ -314,7 +336,8 @@ export function EditorPane({
             onLive={onLive}
             onLeave={onLeaveLive}
             sendFrame={sendFrame}
-            onAttachAgent={onAttachAgent}
+            onSnap={onSnap}
+            onBindVideoGrabber={onBindVideoGrabber}
           />
         </div>
         <div className={view === 'stream' ? 'ide-hidden' : 'ide-fill'}>
