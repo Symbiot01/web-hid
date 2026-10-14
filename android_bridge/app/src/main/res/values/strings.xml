@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">LookCam Bridge</string>
+    <string name="start">Start bridge</string>
+    <string name="stop">Stop bridge</string>
+    <string name="reconnect">Reconnect camera</string>
+    <string name="settings">Connection settings</string>
+    <string name="export_debug">Export debug bundle</string>
+    <string name="allow_background">Keep running in background</string>
+    <string name="channel_name">LookCam bridge</string>
+    <string name="channel_desc">Camera bridge stays connected while the phone is locked.</string>
+</resources>
