@@ -9,7 +9,7 @@ Config is **copied into the image** via `Dockerfile` (no bind-mount of `mediamtx
 ## Coolify
 
 1. New resource → **Docker Compose**.
-2. Base directory: `deploy/mediamtx` (this folder).
+2. Base directory: `/console/deploy/mediamtx` (this folder).
 3. Domain e.g. `mediarelay.sahilpatel.online` → container port **8889** (TCP / HTTPS).  
    If you get **HTTP 502** with a valid Let’s Encrypt cert, the proxy cannot reach the container — confirm port **8889** and that the service joins the `coolify` network (see `docker-compose.yml`).
 4. Env (required for WebRTC ICE):

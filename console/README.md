@@ -22,7 +22,7 @@ npm run dev
 
 ## Coolify
 
-This directory is the Docker build context. The image builds `web/`, serves it from `src/public`, and listens on `PORT` (image default `3000`) and `HOST` `0.0.0.0`. Set `TRUST_PROXY=1` behind the Coolify proxy. `GET /healthz` is the health check. The runtime image includes ffmpeg for the camera ingest.
+Set **Base Directory** to `/console` and **Dockerfile Location** to `/Dockerfile` in Coolify. The image builds `web/`, serves it from `src/public`, and listens on `PORT` (image default `3000`) and `HOST` `0.0.0.0`. Set `TRUST_PROXY=1` behind the Coolify proxy. `GET /healthz` is the health check. The runtime image includes ffmpeg for the camera ingest.
 
 Leave `CAPTURE_TOKEN` empty to refuse the capture agent. Leave `HID_URL` empty until the keyboard relay is listening on another port. Do not put `DEVICE_TOKEN` in this service.
 

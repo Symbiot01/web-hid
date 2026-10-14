@@ -250,10 +250,15 @@ export function AgentPane({
       ) : null}
       <ol ref={feedRef} className="ide-feed">
         {messages.length === 0 ? (
-          <li className="muted ide-empty">
-            {mode === 'ask'
-              ? 'Ask a question about the open C++ file.'
-              : 'Upload a problem screenshot or paste the statement. The agent writes a main() test wrapper first, then implements the solution in the target function or solve().'}
+          <li className="ide-empty-card">
+            <p className="ide-empty-title">
+              {mode === 'ask' ? 'Ask about the open C++ file' : 'Harness-First Coding Agent'}
+            </p>
+            <p className="muted ide-empty">
+              {mode === 'ask'
+                ? 'Ask how the current program works, check time complexity, or debug an edge case without modifying the editor.'
+                : 'Paste a problem statement or attach a screenshot. The agent extracts the signature & sample format, builds a main() test wrapper first, and solves inside the target function or solve().'}
+            </p>
           </li>
         ) : (
           messages.map((message) => {
@@ -296,14 +301,26 @@ export function AgentPane({
           disabled={!configured || (working && mode === 'ask')}
           placeholder={
             mode === 'ask'
-              ? 'Ask about this code'
+              ? 'Ask about this code… (Ctrl+Enter to send)'
               : phase === 'working'
                 ? 'Send a hint or approach for the next attempt…'
                 : phase === 'idle'
-                  ? 'Paste a problem statement or attach a screenshot…'
+                  ? 'Paste a problem statement or attach a screenshot… (Ctrl+Enter to send)'
                   : 'Give guidance, specify an algorithm, or attach a new problem image…'
           }
           onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+              event.preventDefault();
+              const text = draft.trim();
+              if (!text && !image) return;
+              onSend(text, image);
+              setDraft('');
+              setImage(null);
+              setImageName('');
+              if (fileRef.current) fileRef.current.value = '';
+            }
+          }}
         />
         <div className="ide-compose-bar">
           {mode === 'agent' ? (
@@ -317,12 +334,30 @@ export function AgentPane({
                 onChange={(event) => chooseImage(event.target.files?.[0])}
               />
               <label className="btn ghost ide-mini" htmlFor="agent-image">
-                Image
+                + Image
               </label>
-              {imageName ? <span className="muted ide-agent-file">{imageName}</span> : null}
+              {imageName ? (
+                <span className="ide-agent-file-pill">
+                  <span className="ide-agent-file">{imageName}</span>
+                  {image ? (
+                    <button
+                      type="button"
+                      className="ide-file-clear"
+                      aria-label="Remove attached image"
+                      onClick={() => {
+                        setImage(null);
+                        setImageName('');
+                        if (fileRef.current) fileRef.current.value = '';
+                      }}
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </span>
+              ) : null}
             </div>
           ) : (
-            <span />
+            <span className="muted ide-compose-shortcut">Ctrl+Enter to send</span>
           )}
           <button
             type="submit"

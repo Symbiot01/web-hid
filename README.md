@@ -2,7 +2,7 @@
 
 | Directory | Role |
 |---|---|
-| `console/` | Operator website and API (Node/Express + React). Coolify builds this tree from the `web-hid` GitHub repo root. |
+| `console/` | Operator website and API (Node/Express + React). Coolify builds this with Base Directory `/console` and Dockerfile `/Dockerfile`. |
 | `firmware/` | ESP32-S3 USB keyboard and mouse (PlatformIO). |
 | `bridge/` | LookCam session bridge and the desk capture agent. |
 

@@ -10,12 +10,12 @@ type Props = {
 };
 
 function statusLabel(item: TestCase): string {
-  if (item.reason === 'timeout') return 'time limit';
-  if (item.reason === 'output_limit') return 'output limit';
-  if (item.reason === 'runtime') return 'runtime error';
-  if (item.status === 'pass') return 'passed';
-  if (item.status === 'fail') return 'wrong answer';
-  return 'idle';
+  if (item.reason === 'timeout') return 'Time limit';
+  if (item.reason === 'output_limit') return 'Output limit';
+  if (item.reason === 'runtime') return 'Runtime error';
+  if (item.status === 'pass') return 'Passed';
+  if (item.status === 'fail') return 'Wrong answer';
+  return 'Idle';
 }
 
 export function TestsPane({ cases, activeId, onSelect, onChange, onAdd, onRemove }: Props) {
@@ -39,9 +39,11 @@ export function TestsPane({ cases, activeId, onSelect, onChange, onAdd, onRemove
             </button>
           ))}
         </div>
-        <button type="button" className="btn ghost ide-mini" onClick={onAdd}>
-          Add
-        </button>
+        <div className="ide-bar-actions">
+          <button type="button" className="btn ghost ide-mini" onClick={onAdd}>
+            + Add
+          </button>
+        </div>
       </header>
       {active ? (
         <div className="ide-case">
@@ -59,31 +61,44 @@ export function TestsPane({ cases, activeId, onSelect, onChange, onAdd, onRemove
             ) : null}
           </div>
           <label className="ide-field" htmlFor="case-input">
-            <span>Input</span>
+            <span>Input (stdin)</span>
             <textarea
               id="case-input"
+              rows={2}
               value={active.input}
               spellCheck={false}
+              placeholder="Sample stdin…"
               onChange={(event) => onChange(active.id, { input: event.target.value })}
             />
           </label>
-          <label className="ide-field" htmlFor="case-expected">
-            <span>Expected</span>
-            <textarea
-              id="case-expected"
-              value={active.expected}
-              spellCheck={false}
-              onChange={(event) => onChange(active.id, { expected: event.target.value })}
-            />
-          </label>
-          <label className="ide-field" htmlFor="case-actual">
-            <span>Actual</span>
-            <textarea id="case-actual" value={active.actual} readOnly spellCheck={false} />
-          </label>
+          <div className="ide-case-compare">
+            <label className="ide-field" htmlFor="case-expected">
+              <span>Expected</span>
+              <textarea
+                id="case-expected"
+                rows={2}
+                value={active.expected}
+                spellCheck={false}
+                placeholder="Expected stdout…"
+                onChange={(event) => onChange(active.id, { expected: event.target.value })}
+              />
+            </label>
+            <label className="ide-field" htmlFor="case-actual">
+              <span>Actual</span>
+              <textarea
+                id="case-actual"
+                rows={2}
+                value={active.actual}
+                readOnly
+                spellCheck={false}
+                placeholder="Run tests to compare…"
+              />
+            </label>
+          </div>
           {active.stderr && active.stderr.trim() ? (
             <label className="ide-field" htmlFor="case-stderr">
               <span>Stderr</span>
-              <textarea id="case-stderr" value={active.stderr} readOnly spellCheck={false} />
+              <textarea id="case-stderr" rows={2} value={active.stderr} readOnly spellCheck={false} />
             </label>
           ) : null}
         </div>
