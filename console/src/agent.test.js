@@ -7,6 +7,7 @@ const {
   cleanSource,
   createAgentControl,
   entryFunction,
+  entrySignature,
   imageOk,
   parseModelJson,
   sourceHasEntry,
@@ -51,6 +52,11 @@ test('parses model JSON and checks image bytes', () => {
   assert.equal(entryFunction('Solution::findMedianSortedArrays(vector<int>& a)'), 'findMedianSortedArrays');
   assert.equal(entryFunction('main'), 'solve');
   assert.equal(entryFunction('not a function'), 'solve');
+  assert.equal(entrySignature('solve', 'void solve(istream& in, ostream& out)'), 'void solve()');
+  assert.equal(
+    entrySignature('findMedianSortedArrays', 'double findMedianSortedArrays(vector<int>& a, vector<int>& b)'),
+    'double findMedianSortedArrays(vector<int>& a, vector<int>& b)',
+  );
   assert.equal(sourceHasEntry(SOURCE, 'solve'), true);
   assert.equal(sourceHasEntry('int main(){return 0;}\n', 'solve'), false);
   assert.equal(sourceHasEntry('int solve(){return 0;}\nint main(){return 0;}\n', 'solve'), false);

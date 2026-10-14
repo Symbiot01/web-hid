@@ -53,6 +53,13 @@ function entryFunction(name) {
   return member;
 }
 
+function entrySignature(entry, rawSignature) {
+  const name = entryFunction(entry);
+  if (name === 'solve') return 'void solve()';
+  const sig = clip(rawSignature, 300).trim();
+  return sig || `${name}(...)`;
+}
+
 function wantsMoreCases(text, action) {
   if (action === 'more_cases') return true;
   if (typeof text !== 'string' || !text.trim()) return false;
@@ -453,7 +460,7 @@ function promptFor(task, context) {
   const source = clip(context.source, 24_000);
   const failure = clip(context.failure, 6_000);
   const entry = entryFunction(context.entry);
-  const signature = clip(context.signature, 300) || `${entry}(...)`;
+  const signature = entrySignature(entry, context.signature);
   const format = clip(context.format, 1_000) || 'Match the exact input and expected output text in Cases.';
 
   if (task === 'identify') {
@@ -462,15 +469,16 @@ function promptFor(task, context) {
       : '';
     return {
       system: [
-        'You extract programming problems from text or screenshots across any platform (LeetCode, Codeforces, AtCoder, CSES, ICPC, HackerRank, or custom specifications).',
-        'If multiple images/screenshots are provided, they show different parts of the SAME problem (e.g., problem description, examples, constraints, and starter code template). Combine all images and any existing problem context into one complete, unified specification.',
+        'You extract programming problems from text or screenshots across any platform (Codeforces, LeetCode, AtCoder, CSES, ICPC, HackerRank, or custom specifications).',
+        'If multiple images/screenshots are provided, they show different parts of the SAME problem (description, examples, constraints, starter code template). Combine all images and any existing context into one complete specification.',
         'Reply with JSON only: {"title":"","statement":"","casesFromProblem":false,"cases":[{"input":"","expected":""}],"plan":"","functionName":"","signature":"","format":""}.',
         '- title: short problem title (e.g. "Median of Two Sorted Arrays", "Shortest Routes I").',
-        '- statement: complete, clean problem statement combining all parts, including input/output rules, constraints, and edge conditions.',
+        '- statement: complete, clean problem statement combining all parts, including input/output rules, constraints, and edge conditions. If a starter code template or class/function stub is shown in the prompt, screenshot, or editor, include that template signature in statement.',
         '- casesFromProblem / cases: copy all sample inputs and outputs verbatim across all provided screenshots/context ONLY when shown in the problem. If none are shown, set casesFromProblem to false and cases to []. Never guess or invent sample outputs here.',
-        '- functionName: exact method/function name if the problem specifies a class/function signature (e.g. "findMedianSortedArrays", "threeSum", "mergeKLists"). If the problem is a multi-method design class (like LRUCache) or standard stdin/stdout competitive programming, set functionName to "solve".',
-        '- signature: full C++17 signature for that function (e.g. "double findMedianSortedArrays(vector<int>& nums1, vector<int>& nums2)", "ListNode* reverseKGroup(ListNode* head, int k)", or "void solve(istream& in, ostream& out)").',
-        '- format: precise description of the exact case input syntax (e.g. labeled assignments `nums1 = [1,3], nums2 = [2]`, 2D brackets `grid = [[1,0],[0,1]]`, level-order tree `[1,null,2,3]`, or raw whitespace-separated numbers) and exact expected output syntax (e.g. fixed 5 decimals `2.00000`, `[a,b]`, `true`/`false`, `YES`/`NO`, or space/newline-separated values).',
+        '- Template vs. Standard Competitive Programming rule:',
+        '  1. IF a starter template / function signature is given in the problem or screenshot (e.g. LeetCode/HackerRank `class Solution` with `findMedianSortedArrays`, `threeSum`, `reverseKGroup`, or a custom starter function in the editor): conform strictly to that template — set `functionName` to that exact method/function name and `signature` to its exact C++17 signature.',
+        '  2. OTHERWISE (standard stdin/stdout competitive programming like Codeforces, AtCoder, CSES, ICPC, or no template given): ALWAYS set `functionName` to `"solve"` and `signature` to `"void solve()"` (never `void solve(istream&, ostream&)`). In Codeforces style, `void solve()` reads directly from `cin` and writes directly to `cout`.',
+        '- format: precise description of the exact case input syntax (e.g. raw whitespace-separated numbers with testcase count `t`, or labeled assignments `nums1 = [1,3], nums2 = [2]`, `grid = [[1,0],[0,1]]`) and exact expected output syntax (e.g. newline-separated answers, `YES`/`NO`, fixed 5 decimals `2.00000`, or `[a,b]`).',
         '- plan: 1-2 sentences stating the optimal algorithm and its time and space complexity.',
       ].join('\n'),
       user: `Problem text:\n${clip(context.text, 12_000)}${prior}\n\nCurrent editor file:\n${source}`,
@@ -492,7 +500,7 @@ function promptFor(task, context) {
           : 'Generate 4 thorough stdin/stdout test cases for this problem, covering a basic case, boundary/minimal case, tricky edge case, and stress pattern.',
         'Reply with JSON only: {"cases":[{"input":"","expected":""}]}.',
         'Mandatory test-case rules:',
-        '1. Every `input` and `expected` string MUST strictly follow the exact syntax, variable labels, bracket style, and decimal precision shown in Format and Existing cases (for example, if Existing cases use `nums1 = [1,3], nums2 = [2]` and `2.00000`, every new case MUST also use `nums1 = [...], nums2 = [...]` and 5 decimal places).',
+        '1. Every `input` and `expected` string MUST strictly follow the exact syntax, variable labels, bracket style, and decimal precision shown in Format and Existing cases (for example, if Existing cases use raw numbers or `nums1 = [1,3], nums2 = [2]`, every new case MUST match that exact style).',
         '2. Cover diverse edge conditions: empty/single-element inputs, negative numbers, zeros, duplicates, odd vs even lengths, already-sorted vs reverse-sorted, and boundary values allowed by the statement.',
         '3. Trace the problem rules carefully by hand for each new input so every `expected` output is 100% mathematically correct.',
       ].join('\n'),
@@ -502,19 +510,19 @@ function promptFor(task, context) {
   if (task === 'harness') {
     return {
       system: [
-        'Write ONLY the C++17 test harness (`int main()`) and a compilable stub for the solution function.',
+        'Write a clean, minimal C++17 test harness (`int main()`) and a compilable stub for the target function.',
         'Reply with JSON only: {"source":""}.',
-        'Structure the file in two clear sections:',
-        `1. Top section: standard headers (\`<iostream>\`, \`<vector>\`, \`<string>\`, \`<sstream>\`, \`<algorithm>\`, \`<iomanip>\`, etc.), \`using namespace std;\`, any required data structures (\`ListNode\`, \`TreeNode\` if used in \`${signature}\`), and the function \`${signature}\` with a minimal placeholder return so it compiles. Do NOT put the problem algorithm in \`main\`.`,
-        `2. Bottom section: \`int main()\` test wrapper that reads one test case from stdin matching the exact format of Cases, calls \`${entry}\`, and prints the result to stdout matching the exact format of Cases.`,
-        'General input/output harness rules:',
-        '- Inspect the `input` and `expected` strings in Cases carefully.',
-        '- Labeled LeetCode-style inputs (`nums1 = [1,3], nums2 = [2]`, `s = "abc", k = 2`, `grid = [[1,2],[3,4]]`): NEVER parse digits from variable names (`nums1` contains `1`, `nums2` contains `2`, `s1`/`s2`, `word1`/`word2`, `list1`/`list2`!). Always advance past `=` before parsing each argument, or extract each `[...]` / `[[...]]` / `"..."` / number after `=` in order. Handle empty arrays `[]`, negative integers, and multi-line inputs cleanly.',
-        '- Linked lists (`ListNode*`) and binary trees (`TreeNode*`): if used in the signature, include small helpers to build `ListNode*` from `[1,2,3]` or `TreeNode*` from level-order `[1,null,2,3]` and print the returned structure in the exact expected format.',
-        '- In-place `void` functions: if the target function returns `void` and mutates a vector/string by reference, print the mutated argument in the expected format after calling the function.',
-        '- Standard competitive programming inputs (unlabeled whitespace-separated numbers/strings): read cleanly from `cin` (including `t` testcases if the input starts with a testcase count) and pass to `solve`.',
-        '- Match `expected` output formatting exactly: if `expected` has fixed decimals like `2.00000`, use `cout << fixed << setprecision(5)`; if `true`/`false` or `YES`/`NO`, match case; if `[1,2]`, match brackets and commas.',
-        '- Format the C++ code across multiple lines with clean 2-space indentation.',
+        'Header & style rules (mandatory):',
+        '- ALWAYS start with `#include <bits/stdc++.h>` and `using namespace std;` instead of listing multiple individual standard library headers.',
+        '- Write the simplest, cleanest C++17 code possible with 2-space indentation.',
+        'Structure rules:',
+        `- Mode A — Standard Competitive Programming (\`${entry}\` is \`solve\` and signature is \`void solve()\`):`,
+        '  * Write `void solve() {}` above `main()` (it takes NO parameters — never `istream&` or `ostream&` — and will use `cin` and `cout` directly).',
+        '  * Keep `main()` minimal in classic Codeforces style (`ios_base::sync_with_stdio(false); cin.tie(nullptr);`, and either call `solve();` directly or `int t; if (cin >> t) while (t--) solve();` depending on whether the problem has multiple test cases per input).',
+        `- Mode B — Template / Function Signature Given (\`${signature}\` has parameters or a return value, e.g. LeetCode):`,
+        `  * Include any required structs (\`ListNode\`, \`TreeNode\` if used in \`${signature}\`) and the function \`${signature}\` (or \`class Solution\` method + thin wrapper) with a minimal placeholder return so it compiles.`,
+        `  * In \`main()\`, parse one test case from \`cin\` matching the exact format of Cases, call \`${entry}\`, and print the result to \`cout\` matching the exact format of Cases.`,
+        '  * For labeled inputs (`nums1 = [1,3], nums2 = [2]`, `s1 = "abc"`): NEVER parse digits from variable names (`nums1` has `1`, `nums2` has `2`!). Advance past `=` before parsing each argument, and handle `[]`, negative numbers, `[[...]]`, and `"..."` cleanly.',
       ].join('\n'),
       user: `Statement:\n${statement}\n\nTarget function:\n${entry}\n\nSignature:\n${signature}\n\nSample format:\n${format}\n\nCases:\n${cases}`,
     };
@@ -522,28 +530,30 @@ function promptFor(task, context) {
   if (task === 'solve' || task === 'retry') {
     return {
       system: [
-        'Write one complete, production-quality C++17 solution program.',
+        'Write the simplest, cleanest, optimal C++17 solution program.',
         'Reply with JSON only: {"source":"","approach":""}.',
-        'Architecture & correctness rules (mandatory):',
-        `1. Put the entire problem-solving algorithm inside \`${entry}\` (signature: \`${signature}\`) at the top of the file.`,
-        `2. NEVER write the problem algorithm inside \`main()\`. \`main()\` at the bottom of the file is strictly the test wrapper that parses stdin for the test case, calls \`${entry}\`, and formats stdout to match the expected output.`,
-        '3. If a harness is already provided in Previous source, keep its `main()` I/O wrapper intact unless Previous result shows an input-parsing or output-formatting bug.',
-        '4. Beware of labeled inputs like `nums1 = [1,3], nums2 = [2]` or `s1 = "ab", s2 = "ba"`: never parse the `1` or `2` in variable names as input numbers; parse only values after `=` or inside `[...]` / `"..."`. Handle empty arrays `[]`, negative values, 2D arrays `[[...]]`, and `null` tree nodes properly.',
-        '5. Handle general algorithmic edge cases: empty/single-element containers, 64-bit integer overflow (use `long long` for sums/products/distances), modulo arithmetic, disconnected graphs, duplicate elements, and boundary indices.',
-        '6. Match the exact expected output format (such as `fixed << setprecision(5)` for `2.00000`, bracketed lists `[a,b]`, or `true`/`false`).',
-        '7. Format C++ code cleanly across multiple lines with 2-space indentation. Never cram multiple loops or statements onto a single line.',
-        '8. Do not open files, spawn processes, or use the network. `approach` is 1-2 clear sentences stating the algorithm and its time/space complexity.',
+        'Code style & structure rules (mandatory):',
+        '1. Header: ALWAYS use `#include <bits/stdc++.h>` and `using namespace std;` at the top instead of listing individual standard headers (`<iostream>`, `<vector>`, `<algorithm>`, etc.).',
+        '2. Template conformance vs. `void solve()`:',
+        `   - If a specific function/class template was given (\`${signature}\` with parameters/return type): conform to that signature, put the algorithm inside \`${entry}\`, and keep \`main()\` at the bottom strictly as the test wrapper that parses \`cin\`, calls \`${entry}\`, and prints to \`cout\`.`,
+        '   - Otherwise (standard competitive programming / Codeforces style): use `void solve()` with NO parameters (never `istream& in, ostream& out`). Read input directly from `cin` and print output directly to `cout` inside `solve()` (or per-testcase inside `solve()` with `int t; cin >> t; while (t--) solve();` in `main()`).',
+        '3. Keep the code as simple, direct, and readable as possible — avoid over-engineering, unnecessary boilerplate, or stream-passing abstractions.',
+        '4. If Cases use labeled inputs (`nums1 = [1,3], nums2 = [2]`, `s1 = "ab"`), never parse digits inside variable names (`1` in `nums1`); parse only values after `=`. Handle empty arrays `[]`, negative integers, 2D arrays `[[...]]`, and `null` tree nodes properly.',
+        '5. Handle algorithmic edge cases: `long long` for 64-bit sums/products/distances, 1-based vs 0-based indexing, empty/single-element inputs, duplicates, and boundary constraints.',
+        '6. Match the exact expected output format (`fixed << setprecision(...)`, `[a,b]`, `YES`/`NO`, or `\\n`-separated answers).',
+        '7. Format across multiple lines with 2-space indentation. Do not open files, spawn processes, or use the network. `approach` is 1-2 concise sentences stating the algorithm and time/space complexity.',
       ].join('\n'),
-      user: `Statement:\n${statement}\n\nFunction:\n${entry}\n\nSignature:\n${signature}\n\nSample format:\n${format}\n\nCases:\n${cases}\n\nApproach note:\n${hint || 'Choose an optimal, general approach that handles all constraints and edge cases.'}\n\nPrevious source:\n${source}\n\nPrevious result:\n${failure}`,
+      user: `Statement:\n${statement}\n\nFunction:\n${entry}\n\nSignature:\n${signature}\n\nSample format:\n${format}\n\nCases:\n${cases}\n\nApproach:\n${hint || 'Use the simplest optimal algorithm that handles all constraints and edge cases.'}\n\nPrevious source:\n${source}\n\nPrevious result:\n${failure}`,
     };
   }
   if (task === 'fix') {
     return {
       system: [
-        'Repair the C++17 program so it compiles cleanly and keeps the required structure.',
+        'Repair the C++17 program so it compiles cleanly and remains simple and readable.',
         'Reply with JSON only: {"source":""}.',
-        `- Keep all algorithm logic inside \`${entry}\` above \`main()\`.`,
-        `- Keep \`main()\` strictly as the test wrapper that parses the sample input, calls \`${entry}\`, and prints the formatted output.`,
+        '- Prefer `#include <bits/stdc++.h>` and `using namespace std;` at the top.',
+        `- Keep all algorithm logic inside \`${entry}\` above \`main()\`. If \`${entry}\` is \`solve\`, use \`void solve()\` reading from \`cin\` and writing to \`cout\` directly.`,
+        `- Keep \`main()\` minimal at the bottom calling \`${entry}\`.`,
         '- Format the code cleanly across multiple lines with 2-space indentation.',
       ].join('\n'),
       user: `What is wrong:\n${failure}\n\nFunction:\n${entry}\n\nSignature:\n${signature}\n\nSample format:\n${format}\n\nCases:\n${cases}\n\nSource:\n${source}`,
@@ -1029,12 +1039,12 @@ function createAgentControl({ apiKey, model, generate, run }) {
       if (!state.statement) refuse(502, 'The model reply was not usable');
       say(state.statement, 'problem');
       state.entry = entryFunction(found.functionName);
-      state.signature = clip(found.signature, 300) || (state.entry === 'solve' ? 'void solve()' : `${state.entry}(...)`);
+      state.signature = entrySignature(state.entry, found.signature);
       state.format = clip(found.format, 1_000);
       say(
         state.entry === 'solve'
-          ? `Target: solve() (${state.signature}). main() will only parse the test input and print the output.`
-          : `Target: ${state.entry}() (${state.signature}). main() will only parse the test input and format the output.`,
+          ? `Target: void solve() using cin/cout directly with #include <bits/stdc++.h>.`
+          : `Target template: ${state.entry}() (${state.signature}). main() will parse the test input and format the output.`,
       );
       state.step = 'cases';
       if (state.casesFromProblem) {
@@ -1178,7 +1188,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
             state.source = '';
           }
         }
-        if (merged && merged.signature) state.signature = clip(merged.signature, 300);
+        if (merged && merged.signature) state.signature = entrySignature(state.entry, merged.signature);
         if (merged && merged.format) state.format = clip(merged.format, 1_000);
         if (merged && merged.casesFromProblem && validCases(merged.cases)) {
           const seen = new Set(state.cases.map((item) => item.input.trim()));
@@ -1271,6 +1281,7 @@ module.exports = {
   normalizeImages,
   redact,
   entryFunction,
+  entrySignature,
   sourceHasEntry,
   cleanSource,
   wantsMoreCases,
