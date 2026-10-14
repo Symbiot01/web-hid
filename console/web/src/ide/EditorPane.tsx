@@ -21,12 +21,14 @@ type Props = {
   view: 'editor' | 'stream';
   onView: (view: 'editor' | 'stream') => void;
   stream: 2 | 3;
+  onStream: (stream: 2 | 3) => void;
   continuous: boolean;
   onHidKey: (phase: 'down' | 'up', code: string) => void;
   liveMode: LiveMode | null;
   onLive: (mode: LiveMode) => void;
   onLeaveLive: () => void;
   onSnap: (kind: 'frame' | 'agent') => void;
+  onAttachAgent: (file: File, resetFirst: boolean) => void;
   sendFrame: (buf: ArrayBuffer | null) => boolean;
   snapNote: string;
   onClearNote: () => void;
@@ -47,12 +49,14 @@ export function EditorPane({
   view,
   onView,
   stream,
+  onStream,
   continuous,
   onHidKey,
   liveMode,
   onLive,
   onLeaveLive,
   onSnap,
+  onAttachAgent,
   sendFrame,
   snapNote,
   onClearNote,
@@ -305,9 +309,12 @@ export function EditorPane({
           <StreamPane
             active={view === 'stream'}
             stream={stream}
+            onStream={onStream}
             liveMode={liveMode}
+            onLive={onLive}
             onLeave={onLeaveLive}
             sendFrame={sendFrame}
+            onAttachAgent={onAttachAgent}
           />
         </div>
         <div className={view === 'stream' ? 'ide-hidden' : 'ide-fill'}>
@@ -333,7 +340,7 @@ export function EditorPane({
         ) : null}
           {hidPlay ? (
             <p className="ide-hid-editor-status">
-              Sending {Math.min(hidPlay.sent, hidPlay.map.length)}/{hidPlay.map.length}
+              {hidPlay.paused ? 'Paused' : 'Sending'} {Math.min(hidPlay.sent, hidPlay.map.length)}/{hidPlay.map.length}
               {hidPlay.eta ? ` · ~${hidPlay.eta} left` : ''}
             </p>
           ) : null}

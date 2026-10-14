@@ -28,6 +28,8 @@ type Props = {
   cases: TestCase[];
   configured: boolean;
   messages: AgentMessage[];
+  incomingFiles?: File[];
+  onClearIncoming?: () => void;
   onMode: (mode: AgentMode) => void;
   onSend: (text: string, images: ImagePayload[]) => void;
   onAction: (action: 'retry' | 'cases_wrong' | 'more_cases' | 'reset') => void;
@@ -124,6 +126,8 @@ export function AgentPane({
   cases,
   configured,
   messages,
+  incomingFiles,
+  onClearIncoming,
   onMode,
   onSend,
   onAction,
@@ -151,6 +155,13 @@ export function AgentPane({
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   }, [messages.length, phase]);
+
+  useEffect(() => {
+    if (!incomingFiles || incomingFiles.length === 0) return;
+    addFiles(incomingFiles, 'capture');
+    onClearIncoming?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incomingFiles]);
 
   function sendDraft() {
     const text = draft.trim();

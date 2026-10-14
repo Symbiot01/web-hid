@@ -189,22 +189,23 @@ function dumpChunks(text) {
 /**
  * @param {number} ms
  * @param {AbortSignal} signal
+ * @param {{ wake: (() => void) | null, paused: boolean }} gate
  */
-function sleep(ms, signal) {
+function sleep(ms, signal, gate) {
+  if (signal.aborted || gate.paused) return Promise.resolve();
   return new Promise((resolve) => {
-    if (signal.aborted) {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal.removeEventListener('abort', finish);
+      if (gate.wake === finish) gate.wake = null;
       resolve();
-      return;
-    }
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
+    };
+    const timer = setTimeout(finish, ms);
+    gate.wake = finish;
+    signal.addEventListener('abort', finish);
   });
 }
 
@@ -221,6 +222,10 @@ function createHidControl(options = {}) {
   /** @type {AbortController | null} */
   let abort = null;
   let running = false;
+  let paused = false;
+  const delayGate = { wake: /** @type {(() => void) | null} */ (null), paused: false };
+  /** @type {(() => void) | null} */
+  let releasePause = null;
   /** @type {Set<(progress: { state: string, sent: number, total: number, mode: string | null }) => void>} */
   const listeners = new Set();
   let progress = { state: 'idle', sent: 0, total: 0, mode: /** @type {string | null} */ (null) };
@@ -388,6 +393,12 @@ function createHidControl(options = {}) {
           publish({ state: 'cancelled', sent });
           return { ok: false, message: 'Cancelled', sent, total: text.length };
         }
+        await waitWhilePaused(abort.signal);
+        if (paused) await waitWhilePaused(abort.signal);
+        if (abort.signal.aborted) {
+          publish({ state: 'cancelled', sent });
+          return { ok: false, message: 'Cancelled', sent, total: text.length };
+        }
         const result = sendPasteText(part);
         if (!result.ok) {
           publish({ state: 'error', sent });
@@ -400,9 +411,37 @@ function createHidControl(options = {}) {
       publish({ state: 'complete', sent });
       return { ok: true, chars: sent, mode: 'dump' };
     } finally {
-      running = false;
-      abort = null;
+      finishRun();
     }
+  }
+
+  /**
+   * @param {AbortSignal} signal
+   */
+  function waitWhilePaused(signal) {
+    if (!paused || signal.aborted) return Promise.resolve();
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener('abort', finish);
+        if (releasePause === finish) releasePause = null;
+        resolve();
+      };
+      releasePause = finish;
+      signal.addEventListener('abort', finish);
+      if (!paused || signal.aborted) finish();
+    });
+  }
+
+  function finishRun() {
+    running = false;
+    paused = false;
+    delayGate.paused = false;
+    abort = null;
+    releasePause = null;
+    delayGate.wake = null;
   }
 
   /**
@@ -419,6 +458,12 @@ function createHidControl(options = {}) {
     publish({ state: 'running', sent: 0, total: text.length, mode: 'paced' });
     try {
       for (let i = 0; i < text.length; i += 1) {
+        if (signal.aborted) {
+          publish({ state: 'cancelled', sent });
+          return { ok: false, message: 'Cancelled', sent, total: text.length };
+        }
+        await waitWhilePaused(signal);
+        if (paused) await waitWhilePaused(signal);
         if (signal.aborted) {
           publish({ state: 'cancelled', sent });
           return { ok: false, message: 'Cancelled', sent, total: text.length };
@@ -443,13 +488,12 @@ function createHidControl(options = {}) {
         }
         sent += 1;
         publish({ sent });
-        if (i < text.length - 1) await sleep(nextDelayMs(wpm, jitterPct, unit[0]), signal);
+        if (i < text.length - 1) await sleep(nextDelayMs(wpm, jitterPct, unit[0]), signal, delayGate);
       }
       publish({ state: 'complete', sent });
       return { ok: true, chars: sent, mode: 'paced', wpm, jitterPct };
     } finally {
-      running = false;
-      abort = null;
+      finishRun();
     }
   }
 
@@ -475,7 +519,39 @@ function createHidControl(options = {}) {
     return { status: 200, body };
   }
 
+  function pause() {
+    if (!running || !abort || abort.signal.aborted) return { ok: false, error: 'Nothing to pause' };
+    if (paused) return { ok: true };
+    paused = true;
+    delayGate.paused = true;
+    releaseAll();
+    const wake = delayGate.wake;
+    delayGate.wake = null;
+    if (wake) wake();
+    publish({ state: 'paused' });
+    return { ok: true };
+  }
+
+  function resume() {
+    if (!running || !paused || !abort || abort.signal.aborted) return { ok: false, error: 'Nothing to resume' };
+    paused = false;
+    delayGate.paused = false;
+    const wake = releasePause;
+    releasePause = null;
+    if (wake) wake();
+    publish({ state: 'running' });
+    return { ok: true };
+  }
+
   function cancel() {
+    paused = false;
+    delayGate.paused = false;
+    const wakeDelay = delayGate.wake;
+    delayGate.wake = null;
+    if (wakeDelay) wakeDelay();
+    const wakeHold = releasePause;
+    releasePause = null;
+    if (wakeHold) wakeHold();
     if (abort) {
       abort.abort();
       publish({ state: 'cancelled' });
@@ -495,6 +571,8 @@ function createHidControl(options = {}) {
     forwardLiveFrame,
     releaseAll,
     paste,
+    pause,
+    resume,
     cancel,
     subscribeProgress,
   };

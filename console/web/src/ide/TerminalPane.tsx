@@ -19,6 +19,8 @@ type Props = {
   onTab: (tab: Tab) => void;
   stream: 2 | 3;
   onStream: (stream: 2 | 3) => void;
+  onOpenStream: () => void;
+  onAttachAgent: (file: File, resetFirst: boolean) => void;
   continuous: boolean;
   liveMode: LiveMode | null;
   onContinuous: (enabled: boolean) => void;
@@ -39,6 +41,8 @@ export function TerminalPane({
   onTab,
   stream,
   onStream,
+  onOpenStream,
+  onAttachAgent,
   continuous,
   liveMode,
   onContinuous,
@@ -88,7 +92,13 @@ export function TerminalPane({
       </header>
       <pre className={tab === 'terminal' ? 'ide-output' : 'ide-hidden'}>{output || 'Run has not produced output yet.'}</pre>
       <div className={tab === 'camera' ? 'ide-fill' : 'ide-hidden'}>
-        <CameraPanel active={tab === 'camera'} stream={stream} onStream={onStream} />
+        <CameraPanel
+          active={tab === 'camera'}
+          stream={stream}
+          onStream={onStream}
+          onOpenStream={onOpenStream}
+          onAttachAgent={onAttachAgent}
+        />
       </div>
       <div className={tab === 'hid' ? 'ide-fill' : 'ide-hidden'}>
         <HidPane

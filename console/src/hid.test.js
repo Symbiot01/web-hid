@@ -116,6 +116,25 @@ test('in-process HID forwards frames, paces paste, and hides the device token', 
   assert.equal(cancelled.status, 409);
   assert.equal(cancelled.body.error, 'Cancelled');
   assert.equal(JSON.stringify(cancelled).includes(token), false);
+
+  assert.equal(hid.pause().ok, false);
+  const held = hid.paste({ text: 'abcdefghij', mode: 'paced', wpm: 20, jitterPct: 0 });
+  assert.equal(hid.pause().ok, true);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const heldProgress = progress[progress.length - 1];
+  assert.equal(heldProgress.state, 'paused');
+  const pausedAt = heldProgress.sent;
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.equal(progress[progress.length - 1].state, 'paused');
+  assert.equal(progress[progress.length - 1].sent, pausedAt);
+  assert.equal(hid.resume().ok, true);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(progress[progress.length - 1].sent > pausedAt, true);
+  hid.cancel();
+  const stopped = await held;
+  assert.equal(stopped.status, 409);
+  assert.equal(stopped.body.error, 'Cancelled');
+  assert.equal(JSON.stringify(stopped).includes(token), false);
   unsubscribe();
 
   hid.clearDevice(device);

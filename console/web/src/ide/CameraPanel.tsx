@@ -70,16 +70,19 @@ type Props = {
   active: boolean;
   stream: 2 | 3;
   onStream: (stream: 2 | 3) => void;
+  onOpenStream: () => void;
+  onAttachAgent: (file: File, resetFirst: boolean) => void;
 };
 
-export function CameraPanel({ active, stream, onStream }: Props) {
+export function CameraPanel({ active, stream, onStream, onOpenStream, onAttachAgent }: Props) {
   const [status, setStatus] = useState<CameraStatus | null>(null);
-  const [output, setOutput] = useState('Video stops about 20 seconds after you leave this tab.');
+  const [output, setOutput] = useState('Ready. Use the top cards to reconnect, flip, adjust brightness, or capture.');
   const [busy, setBusy] = useState(false);
+  const [capturing, setCapturing] = useState<'save' | 'agent' | null>(null);
   const [alarm, setAlarm] = useState<AlarmForm>(EMPTY_ALARM);
   const [led, setLed] = useState<LedForm>(EMPTY_LED);
   const [saturation, setSaturation] = useState(30);
-  const [brightness, setBrightness] = useState(30);
+  const [brightness, setBrightness] = useState(35);
   const [ssid, setSsid] = useState('');
   const [wifiPwd, setWifiPwd] = useState('');
   const [nextPwd, setNextPwd] = useState('');
@@ -131,6 +134,13 @@ export function CameraPanel({ active, stream, onStream }: Props) {
     }
   };
 
+  const readPicture = async () => {
+    const result = await run('GetDevVideoInfo');
+    if (!result?.body) return;
+    if (typeof result.body.saturation === 'number') setSaturation(result.body.saturation);
+    if (typeof result.body.brightness === 'number') setBrightness(result.body.brightness);
+  };
+
   const readAlarm = async () => {
     const result = await run('GetAlarmInfo');
     if (!result?.body) return;
@@ -141,13 +151,6 @@ export function CameraPanel({ active, stream, onStream }: Props) {
     const result = await run('GetLedInfo');
     if (!result?.body) return;
     setLed((prev) => fill(prev, result.body));
-  };
-
-  const readPicture = async () => {
-    const result = await run('GetDevVideoInfo');
-    if (!result?.body) return;
-    if (typeof result.body.saturation === 'number') setSaturation(result.body.saturation);
-    if (typeof result.body.brightness === 'number') setBrightness(result.body.brightness);
   };
 
   const scan = async () => {
@@ -162,197 +165,345 @@ export function CameraPanel({ active, stream, onStream }: Props) {
     );
   };
 
-  const bridgeLine = !status
-    ? 'Waiting for the console'
-    : status.bridge === 'offline'
-      ? 'Bridge offline'
-      : `${status.phase || 'connecting'} · attempt ${status.attempt}`;
+  async function captureServerFrame(target: 'save' | 'agent') {
+    if (capturing) return;
+    setCapturing(target);
+    try {
+      let res = await fetch('/api/capture/frame', { method: 'POST', credentials: 'same-origin' });
+      let sourceLabel = 'RTSP frame';
+      if (!res.ok) {
+        res = await fetch('/api/capture/snap', { method: 'POST', credentials: 'same-origin' });
+        sourceLabel = 'Capture agent';
+      }
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setOutput(body.error || 'Capture failed');
+        return;
+      }
+      const blob = await res.blob();
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(11, 19);
+      const filename = `capture-${stamp}.jpg`;
+      if (target === 'save') {
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = filename;
+        anchor.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1500);
+        setOutput(`Saved ${filename} (${sourceLabel})`);
+      } else {
+        const file = new File([blob], filename, { type: blob.type || 'image/jpeg' });
+        onAttachAgent(file, false);
+        setOutput(`Attached ${filename} to Agent pane (${sourceLabel})`);
+      }
+    } catch {
+      setOutput('Capture failed');
+    } finally {
+      setCapturing(null);
+    }
+  }
+
+  const bridgeOnline = status?.bridge === 'online';
+  const cameraOn = status?.cameraVideo === 'on';
+  const ingestOn = Boolean(status?.ingest);
 
   return (
     <aside className="ide-cam">
-      <p className="ide-cam-status">{bridgeLine}</p>
-      <p className="ide-cam-sub">
-        {status?.cameraVideo === 'on' ? 'Camera streaming' : status?.video === 'wanted' ? 'Opening camera' : 'Camera idle'}
-        {status?.ingest ? ' · server publishing' : ''}
-      </p>
-      <ul className="ide-cam-checks">
-        {(status?.checks ?? []).map((check) => (
-          <li key={check.name} className={check.ok ? 'ok' : ''}>
-            {check.name}: {check.detail || (check.ok ? 'ok' : 'waiting')}
-          </li>
-        ))}
-      </ul>
-      <label className="ide-cam-field">
-        Stream
-        <select
-          value={stream}
-          onChange={(event) => onStream(event.target.value === '3' ? 3 : 2)}
-        >
-          <option value={2}>2</option>
-          <option value={3}>3</option>
-        </select>
-      </label>
-      <div className="ide-cam-actions">
-        <button type="button" className="btn ghost ide-mini" disabled={busy} onClick={() => void run('GetDevInfo')}>
-          Info
-        </button>
-        <button type="button" className="btn ghost ide-mini" disabled={busy} onClick={() => void run('GetDevStream')}>
-          Streams
-        </button>
-        <button type="button" className="btn ghost ide-mini" disabled={busy} onClick={() => void readPicture()}>
-          Picture
-        </button>
-        <button type="button" className="btn ghost ide-mini" disabled={busy} onClick={() => void run('reconnect')}>
-          Recover
-        </button>
-        <button type="button" className="btn ghost ide-mini" disabled={busy} onClick={() => void run('SetLed', { ledstatus: 1 })}>
-          LED on
-        </button>
-        <button type="button" className="btn ghost ide-mini" disabled={busy} onClick={() => void run('SetLed', { ledstatus: 0 })}>
-          LED off
-        </button>
-        <button type="button" className="btn ghost ide-mini" disabled={busy} onClick={() => void run('LevelFlip')}>
-          Flip horizontal
-        </button>
-        <button type="button" className="btn ghost ide-mini" disabled={busy} onClick={() => void run('VerticalFlip')}>
-          Flip vertical
-        </button>
-      </div>
-      <details>
-        <summary>Picture values</summary>
-        <label className="ide-cam-field">
-          Saturation
-          <input
-            type="number"
-            min={0}
-            max={100}
-            value={saturation}
-            onChange={(event) => setSaturation(Number(event.target.value))}
-          />
-        </label>
-        <label className="ide-cam-field">
-          Brightness
-          <input
-            type="number"
-            min={0}
-            max={100}
-            value={brightness}
-            onChange={(event) => setBrightness(Number(event.target.value))}
-          />
-        </label>
-        <button
-          type="button"
-          className="btn ghost ide-mini"
-          disabled={busy}
-          onClick={() => void run('SetDevVideoInfo', { saturation, brightness })}
-        >
-          Save picture
-        </button>
-      </details>
-      <details>
-        <summary>Alarm</summary>
-        <button type="button" className="btn ghost ide-mini" disabled={busy} onClick={() => void readAlarm()}>
-          Read alarm
-        </button>
-        <ClockFields value={alarm} onChange={setAlarm} />
-        <label className="ide-cam-field">
-          Sensitivity
-          <input
-            type="number"
-            min={0}
-            max={10}
-            value={alarm.sensitivity}
-            onChange={(event) => setAlarm({ ...alarm, sensitivity: Number(event.target.value) })}
-          />
-        </label>
-        <label className="ide-cam-field">
-          GOP
-          <input
-            type="number"
-            min={1}
-            max={120}
-            value={alarm.goptime}
-            onChange={(event) => setAlarm({ ...alarm, goptime: Number(event.target.value) })}
-          />
-        </label>
-        <Bit label="Audio" value={alarm.audio} onChange={(audio) => setAlarm({ ...alarm, audio })} />
-        <Bit label="Push" value={alarm.putalarm} onChange={(putalarm) => setAlarm({ ...alarm, putalarm })} />
-        <Bit label="OSD" value={alarm.osd} onChange={(osd) => setAlarm({ ...alarm, osd })} />
-        <button type="button" className="btn ghost ide-mini" disabled={busy} onClick={() => void run('SetAlarmInfo', alarm)}>
-          Save alarm
-        </button>
-      </details>
-      <details>
-        <summary>LED schedule</summary>
-        <button type="button" className="btn ghost ide-mini" disabled={busy} onClick={() => void readLed()}>
-          Read schedule
-        </button>
-        <Bit label="Control" value={led.control} onChange={(control) => setLed({ ...led, control })} />
-        <ClockFields value={led} onChange={setLed} />
-        <button type="button" className="btn ghost ide-mini" disabled={busy} onClick={() => void run('SetLedInfo', led)}>
-          Save schedule
-        </button>
-      </details>
-      <details>
-        <summary>Wi-Fi</summary>
-        <p className="ide-cam-sub">Joining a network takes the camera off its access point.</p>
-        <button type="button" className="btn ghost ide-mini" disabled={busy} onClick={() => void scan()}>
-          Scan
-        </button>
-        <ul className="ide-cam-nets">
-          {networks.map((network) => (
-            <li key={network.ssid}>
-              <button type="button" className="btn ghost ide-mini" onClick={() => setSsid(network.ssid)}>
-                {network.ssid}
-                {typeof network.sig === 'number' ? ` (${network.sig})` : ''}
+      <div className="ide-cam-grid">
+        <section className="ide-cam-card" aria-label="Connection and Recovery">
+          <div className="ide-hid-head">
+            <span className={`ide-hid-badge${bridgeOnline && ingestOn ? ' ok' : ''}`}>
+              <span className="ide-hid-dot" aria-hidden="true" />
+              {bridgeOnline ? (ingestOn ? 'Streaming Live' : status?.phase || 'Bridge Online') : 'Bridge Offline'}
+            </span>
+            <span className="ide-hid-stat">Attempt {status?.attempt ?? 0}</span>
+          </div>
+          <div className="ide-hid-pills">
+            <span className={`ide-hid-pill${bridgeOnline ? ' ok' : ''}`}>
+              Bridge {bridgeOnline ? 'online' : 'offline'}
+            </span>
+            <span className={`ide-hid-pill${cameraOn ? ' ok' : ''}`}>
+              Camera {status?.cameraVideo ?? 'off'}
+            </span>
+            <span className={`ide-hid-pill${ingestOn ? ' ok' : ''}`}>
+              Ingest {ingestOn ? 'publishing' : 'idle'}
+            </span>
+            {(status?.checks ?? []).map((check) => (
+              <span key={check.name} className={`ide-hid-pill${check.ok ? ' ok' : ''}`} title={check.detail}>
+                {check.name}: {check.detail || (check.ok ? 'ok' : 'wait')}
+              </span>
+            ))}
+          </div>
+          <div className="ide-cam-tier">
+            <span className="ide-hid-label">Reconnect & Recovery</span>
+            <div className="ide-cam-actions">
+              <button
+                type="button"
+                className="btn primary ide-mini"
+                onClick={onOpenStream}
+                title="Open the Stream tab and reconnect WebRTC player"
+              >
+                1. Open / Reconnect Stream
               </button>
-            </li>
-          ))}
-        </ul>
-        <label className="ide-cam-field">
-          Name
-          <input value={ssid} maxLength={32} autoComplete="off" onChange={(event) => setSsid(event.target.value)} />
-        </label>
-        <label className="ide-cam-field">
-          Password
-          <input
-            type="password"
-            value={wifiPwd}
-            maxLength={64}
-            autoComplete="off"
-            onChange={(event) => setWifiPwd(event.target.value)}
-          />
-        </label>
-        <button
-          type="button"
-          className="btn ghost ide-mini"
-          disabled={busy || !ssid}
-          onClick={() => void run('OpenWifi', { sid: ssid, wifiPwd })}
-        >
-          Join network
-        </button>
+              <button
+                type="button"
+                className="btn ghost ide-mini"
+                onClick={() => onStream(stream === 2 ? 3 : 2)}
+                title="Switch between Stream 2 and Stream 3"
+              >
+                2. Stream {stream} → {stream === 2 ? 3 : 2}
+              </button>
+              <button
+                type="button"
+                className="btn ghost ide-mini"
+                disabled={busy}
+                onClick={() => void run('reconnect')}
+                title="Tell camera bridge to reset UDP session"
+              >
+                3. Recover Bridge
+              </button>
+            </div>
+          </div>
+          <div className="ide-cam-tier">
+            <span className="ide-hid-label">Capture</span>
+            <div className="ide-cam-actions">
+              <button
+                type="button"
+                className="btn primary ide-mini"
+                disabled={capturing !== null}
+                onClick={() => void captureServerFrame('agent')}
+              >
+                {capturing === 'agent' ? 'Capturing…' : '+ Capture to Agent'}
+              </button>
+              <button
+                type="button"
+                className="btn ghost ide-mini"
+                disabled={capturing !== null}
+                onClick={() => void captureServerFrame('save')}
+              >
+                {capturing === 'save' ? 'Saving…' : 'Save Local'}
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section className="ide-cam-card" aria-label="Orientation and Brightness">
+          <div className="ide-hid-head">
+            <strong className="ide-cam-card-title">Orientation & Picture</strong>
+            <button type="button" className="btn ghost ide-mini" disabled={busy} onClick={() => void readPicture()}>
+              Read current
+            </button>
+          </div>
+          <div className="ide-cam-tier">
+            <span className="ide-hid-label">Flip Camera (Primary)</span>
+            <div className="ide-cam-actions">
+              <button
+                type="button"
+                className="btn primary ide-mini"
+                disabled={busy}
+                onClick={() => void run('LevelFlip')}
+              >
+                Flip Horizontal (Mirror)
+              </button>
+              <button
+                type="button"
+                className="btn primary ide-mini"
+                disabled={busy}
+                onClick={() => void run('VerticalFlip')}
+              >
+                Flip Vertical (Upside-Down)
+              </button>
+            </div>
+          </div>
+          <div className="ide-hid-sliders">
+            <label className="ide-cam-field">
+              <span>
+                Brightness <strong>{brightness}</strong>
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={5}
+                value={brightness}
+                disabled={busy}
+                onChange={(event) => setBrightness(Number(event.target.value))}
+              />
+            </label>
+            <label className="ide-cam-field">
+              <span>
+                Saturation <strong>{saturation}</strong>
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={5}
+                value={saturation}
+                disabled={busy}
+                onChange={(event) => setSaturation(Number(event.target.value))}
+              />
+            </label>
+          </div>
+          <div className="ide-cam-actions">
+            {[20, 40, 60, 80].map((preset) => (
+              <button
+                key={preset}
+                type="button"
+                className="btn ghost ide-mini"
+                disabled={busy}
+                onClick={() => {
+                  setBrightness(preset);
+                  void run('SetDevVideoInfo', { brightness: preset, saturation });
+                }}
+              >
+                Bright {preset}%
+              </button>
+            ))}
+            <button
+              type="button"
+              className="btn primary ide-mini"
+              disabled={busy}
+              onClick={() => void run('SetDevVideoInfo', { saturation, brightness })}
+            >
+              Apply Picture
+            </button>
+          </div>
+        </section>
+      </div>
+
+      <details className="ide-cam-advanced">
+        <summary>Diagnostics, LED, Alarm & Wi-Fi (Advanced)</summary>
+        <div className="ide-cam-actions" style={{ marginTop: '0.5rem' }}>
+          <button type="button" className="btn ghost ide-mini" disabled={busy} onClick={() => void run('GetDevInfo')}>
+            Device Info
+          </button>
+          <button type="button" className="btn ghost ide-mini" disabled={busy} onClick={() => void run('GetDevStream')}>
+            Stream Info
+          </button>
+          <button
+            type="button"
+            className="btn ghost ide-mini"
+            disabled={busy}
+            onClick={() => void run('SetLed', { ledstatus: 1 })}
+          >
+            LED On
+          </button>
+          <button
+            type="button"
+            className="btn ghost ide-mini"
+            disabled={busy}
+            onClick={() => void run('SetLed', { ledstatus: 0 })}
+          >
+            LED Off
+          </button>
+        </div>
+        <details>
+          <summary>Alarm</summary>
+          <button type="button" className="btn ghost ide-mini" disabled={busy} onClick={() => void readAlarm()}>
+            Read alarm
+          </button>
+          <ClockFields value={alarm} onChange={setAlarm} />
+          <label className="ide-cam-field">
+            Sensitivity
+            <input
+              type="number"
+              min={0}
+              max={10}
+              value={alarm.sensitivity}
+              onChange={(event) => setAlarm({ ...alarm, sensitivity: Number(event.target.value) })}
+            />
+          </label>
+          <label className="ide-cam-field">
+            GOP
+            <input
+              type="number"
+              min={1}
+              max={120}
+              value={alarm.goptime}
+              onChange={(event) => setAlarm({ ...alarm, goptime: Number(event.target.value) })}
+            />
+          </label>
+          <Bit label="Audio" value={alarm.audio} onChange={(audio) => setAlarm({ ...alarm, audio })} />
+          <Bit label="Push" value={alarm.putalarm} onChange={(putalarm) => setAlarm({ ...alarm, putalarm })} />
+          <Bit label="OSD" value={alarm.osd} onChange={(osd) => setAlarm({ ...alarm, osd })} />
+          <button type="button" className="btn ghost ide-mini" disabled={busy} onClick={() => void run('SetAlarmInfo', alarm)}>
+            Save alarm
+          </button>
+        </details>
+        <details>
+          <summary>LED schedule</summary>
+          <button type="button" className="btn ghost ide-mini" disabled={busy} onClick={() => void readLed()}>
+            Read schedule
+          </button>
+          <Bit label="Control" value={led.control} onChange={(control) => setLed({ ...led, control })} />
+          <ClockFields value={led} onChange={setLed} />
+          <button type="button" className="btn ghost ide-mini" disabled={busy} onClick={() => void run('SetLedInfo', led)}>
+            Save schedule
+          </button>
+        </details>
+        <details>
+          <summary>Wi-Fi</summary>
+          <p className="ide-cam-sub">Joining a network takes the camera off its access point.</p>
+          <button type="button" className="btn ghost ide-mini" disabled={busy} onClick={() => void scan()}>
+            Scan
+          </button>
+          <ul className="ide-cam-nets">
+            {networks.map((network) => (
+              <li key={network.ssid}>
+                <button type="button" className="btn ghost ide-mini" onClick={() => setSsid(network.ssid)}>
+                  {network.ssid}
+                  {typeof network.sig === 'number' ? ` (${network.sig})` : ''}
+                </button>
+              </li>
+            ))}
+          </ul>
+          <label className="ide-cam-field">
+            Name
+            <input value={ssid} maxLength={32} autoComplete="off" onChange={(event) => setSsid(event.target.value)} />
+          </label>
+          <label className="ide-cam-field">
+            Password
+            <input
+              type="password"
+              value={wifiPwd}
+              maxLength={64}
+              autoComplete="off"
+              onChange={(event) => setWifiPwd(event.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            className="btn ghost ide-mini"
+            disabled={busy || !ssid}
+            onClick={() => void run('OpenWifi', { sid: ssid, wifiPwd })}
+          >
+            Join network
+          </button>
+        </details>
+        <details>
+          <summary>Device password</summary>
+          <label className="ide-cam-field">
+            New password
+            <input
+              type="password"
+              value={nextPwd}
+              maxLength={64}
+              autoComplete="new-password"
+              onChange={(event) => setNextPwd(event.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            className="btn ghost ide-mini"
+            disabled={busy || !nextPwd}
+            onClick={() => void run('ModifyPwd', { newpwd: nextPwd })}
+          >
+            Change password
+          </button>
+        </details>
       </details>
-      <details>
-        <summary>Device password</summary>
-        <label className="ide-cam-field">
-          New password
-          <input
-            type="password"
-            value={nextPwd}
-            maxLength={64}
-            autoComplete="new-password"
-            onChange={(event) => setNextPwd(event.target.value)}
-          />
-        </label>
-        <button
-          type="button"
-          className="btn ghost ide-mini"
-          disabled={busy || !nextPwd}
-          onClick={() => void run('ModifyPwd', { newpwd: nextPwd })}
-        >
-          Change password
-        </button>
-      </details>
+
       <pre className="ide-cam-out">{output}</pre>
     </aside>
   );

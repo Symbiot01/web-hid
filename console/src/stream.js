@@ -259,6 +259,8 @@ function grabFrame(rtspUrl) {
         rtspUrl,
         '-frames:v',
         '1',
+        '-q:v',
+        '2',
         '-f',
         'image2pipe',
         '-vcodec',

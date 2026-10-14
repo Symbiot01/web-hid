@@ -116,6 +116,7 @@ export function IdePage({ busy, onLogout }: Props) {
   const [liveMode, setLiveMode] = useState<LiveMode | null>(null);
   const [snapNote, setSnapNote] = useState('');
   const [hidPlay, setHidPlay] = useState<HidPlay | null>(null);
+  const [incomingFiles, setIncomingFiles] = useState<File[]>([]);
   const hid = useHidLink({
     connect: bottomTab === 'hid' || hidContinuous || liveMode !== null,
     watch: bottomTab === 'hid' || hidContinuous || liveMode !== null,
@@ -266,6 +267,12 @@ export function IdePage({ busy, onLogout }: Props) {
   function showView(next: 'editor' | 'stream') {
     setEditorView(next);
     if (next !== 'stream') setLiveMode(null);
+  }
+
+  function attachToAgent(file: File, resetFirst: boolean) {
+    if (resetFirst) guide('reset');
+    setMode('agent');
+    setIncomingFiles((prev) => [...prev, file]);
   }
 
   async function snap(kind: 'frame' | 'agent') {
@@ -564,6 +571,8 @@ export function IdePage({ busy, onLogout }: Props) {
                 cases={cases}
                 configured={agentReady}
                 messages={messages}
+                incomingFiles={incomingFiles}
+                onClearIncoming={() => setIncomingFiles([])}
                 onMode={setMode}
                 onSend={(text, image) => {
                   void send(text, image);
@@ -621,6 +630,7 @@ export function IdePage({ busy, onLogout }: Props) {
                 view={editorView}
                 onView={showView}
                 stream={cameraStream}
+                onStream={setCameraStream}
                 continuous={hidContinuous}
                 onHidKey={(phase, code) => hidSend.current(phase, code)}
                 liveMode={liveMode}
@@ -629,6 +639,7 @@ export function IdePage({ busy, onLogout }: Props) {
                 onSnap={(kind) => {
                   void snap(kind);
                 }}
+                onAttachAgent={attachToAgent}
                 sendFrame={hid.sendFrame}
                 snapNote={snapNote}
                 onClearNote={() => setSnapNote('')}
@@ -642,6 +653,8 @@ export function IdePage({ busy, onLogout }: Props) {
                 onTab={setBottomTab}
                 stream={cameraStream}
                 onStream={setCameraStream}
+                onOpenStream={() => setEditorView('stream')}
+                onAttachAgent={attachToAgent}
                 continuous={hidContinuous}
                 liveMode={liveMode}
                 onContinuous={(enabled) => {

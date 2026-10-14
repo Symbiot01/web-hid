@@ -358,6 +358,20 @@ function createApp(opts) {
     },
   );
 
+  app.post('/api/hid/paste/pause', requireSession(config.sessionSecret), hidLimiter, (_req, res) => {
+    if (!hid.configured()) return res.status(503).json({ error: 'HID is not configured' });
+    const result = hid.pause();
+    if (!result.ok) return res.status(409).json({ error: result.error });
+    return res.status(200).json({ ok: true });
+  });
+
+  app.post('/api/hid/paste/resume', requireSession(config.sessionSecret), hidLimiter, (_req, res) => {
+    if (!hid.configured()) return res.status(503).json({ error: 'HID is not configured' });
+    const result = hid.resume();
+    if (!result.ok) return res.status(409).json({ error: result.error });
+    return res.status(200).json({ ok: true });
+  });
+
   app.post('/api/hid/paste/cancel', requireSession(config.sessionSecret), hidLimiter, (_req, res) => {
     if (!hid.configured()) return res.status(503).json({ error: 'HID is not configured' });
     hid.cancel();

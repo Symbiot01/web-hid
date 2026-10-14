@@ -60,7 +60,7 @@ export function HidPane({
 }: Props) {
   const [wpm, setWpm] = useState(80);
   const [jitterPct, setJitterPct] = useState(25);
-  const [scope, setScope] = useState<HidScope>('file');
+  const [scope, setScope] = useState<HidScope>('functions');
   const [indent, setIndent] = useState<HidIndent>('strip');
   const [draft, setDraft] = useState('');
   const [note, setNote] = useState('Choose what to send from the file, or paste text below.');
@@ -101,10 +101,15 @@ export function HidPane({
         const next = JSON.parse(event.data) as Progress;
         setProgress(next);
         if (!mapRef.current) return;
-        if (next.state === 'running') {
+        if (next.state === 'running' || next.state === 'paused') {
           const left = formatHidTime(estimateHidMs(textRef.current, wpm, next.sent));
-          playRef.current({ sent: next.sent, map: mapRef.current, eta: left });
-          setNote(`Sending ${next.sent}/${next.total} chars at ${wpm} WPM (~${left} left)…`);
+          const holding = next.state === 'paused';
+          playRef.current({ sent: next.sent, map: mapRef.current, eta: left, paused: holding });
+          setNote(
+            holding
+              ? `Paused at ${next.sent}/${next.total} chars (~${left} left).`
+              : `Sending ${next.sent}/${next.total} chars at ${wpm} WPM (~${left} left)…`,
+          );
         } else if (next.state === 'complete' || next.state === 'cancelled' || next.state === 'error') {
           mapRef.current = null;
           textRef.current = '';
@@ -175,6 +180,19 @@ export function HidPane({
     }
   }
 
+  async function togglePause() {
+    try {
+      const path = progress.state === 'paused' ? '/api/hid/paste/resume' : '/api/hid/paste/pause';
+      const res = await fetch(path, { method: 'POST', credentials: 'same-origin' });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setNote(body.error || 'Pause failed');
+      }
+    } catch {
+      setNote(progress.state === 'paused' ? 'Resume failed' : 'Pause failed');
+    }
+  }
+
   async function cancel() {
     try {
       await fetch('/api/hid/paste/cancel', { method: 'POST', credentials: 'same-origin' });
@@ -190,7 +208,8 @@ export function HidPane({
   }
 
   const device = !status.configured ? 'Not configured' : status.deviceConnected ? 'Connected' : 'Offline';
-  const sending = busy || progress.state === 'running';
+  const paused = progress.state === 'paused';
+  const sending = busy || progress.state === 'running' || paused;
   const pct = progress.total > 0 ? Math.min(100, Math.round((progress.sent / progress.total) * 100)) : 0;
   const remainingEta =
     sending && textRef.current
@@ -227,11 +246,13 @@ export function HidPane({
           <div className="ide-hid-meter" aria-live="polite">
             <div className="ide-hid-meter-top">
               <span>
-                {sending
-                  ? `Sending · ~${remainingEta} left`
-                  : progress.state === 'complete'
-                    ? 'Sent'
-                    : progress.state}
+                {paused
+                  ? `Paused · ~${remainingEta} left`
+                  : sending
+                    ? `Sending · ~${remainingEta} left`
+                    : progress.state === 'complete'
+                      ? 'Sent'
+                      : progress.state}
               </span>
               <span>
                 {progress.sent}/{progress.total} ({pct}%)
@@ -355,13 +376,21 @@ export function HidPane({
           <button
             type="button"
             className="btn ghost ide-mini"
+            disabled={!sending}
+            onClick={() => void togglePause()}
+          >
+            {paused ? 'Resume' : 'Pause'}
+          </button>
+          <button type="button" className="btn ghost ide-mini" disabled={!sending} onClick={() => void cancel()}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn ghost ide-mini"
             disabled={sending || !draft}
             onClick={() => void sendPayload(draft, 'Paste', null)}
           >
             Send paste{draft ? ` (${draft.length} · ~${draftEta})` : ''}
-          </button>
-          <button type="button" className="btn ghost ide-mini" disabled={!sending} onClick={() => void cancel()}>
-            Cancel
           </button>
         </div>
         <textarea

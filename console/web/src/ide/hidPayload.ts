@@ -3,7 +3,7 @@
 export type HidScope = 'file' | 'functions';
 export type HidIndent = 'keep' | 'strip';
 
-export type HidPlay = { sent: number; map: number[]; eta: string };
+export type HidPlay = { sent: number; map: number[]; eta: string; paused?: boolean };
 
 export function estimateHidMs(text: string, wpm: number, from = 0): number {
   if (wpm <= 0 || text.length <= 1 || from >= text.length - 1) return 0;
