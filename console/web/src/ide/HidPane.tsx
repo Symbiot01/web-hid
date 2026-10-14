@@ -51,7 +51,7 @@ export function HidPane({
   const [wpm, setWpm] = useState(80);
   const [jitterPct, setJitterPct] = useState(25);
   const [draft, setDraft] = useState('');
-  const [note, setNote] = useState('Paste or send the open file. Timing stays on the relay.');
+  const [note, setNote] = useState('Paste or send the open file. Timing stays on the server.');
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<Progress>({ state: 'idle', sent: 0, total: 0, mode: null });
   const senderRef = useRef(onSender);
@@ -98,7 +98,7 @@ export function HidPane({
       return;
     }
     if (!status.configured) {
-      setNote('HID relay is not configured.');
+      setNote('HID is not configured.');
       return;
     }
     if (!status.deviceConnected) {
@@ -149,7 +149,7 @@ export function HidPane({
       <section className="ide-hid-debug" aria-label="HID connection">
         <p className="ide-cam-status">HID {device}</p>
         <ul className="ide-cam-checks">
-          <li className={status.configured ? 'ok' : ''}>Relay: {status.configured ? 'configured' : 'not configured'}</li>
+          <li className={status.configured ? 'ok' : ''}>HID: {status.configured ? 'configured' : 'not configured'}</li>
           <li className={status.deviceConnected ? 'ok' : ''}>Device: {device}</li>
           <li className={socketOpen ? 'ok' : ''}>Live socket: {socketOpen ? 'open' : 'closed'}</li>
           <li className={continuous ? 'ok' : ''}>Continuous: {continuous ? 'editor keys' : 'off'}</li>

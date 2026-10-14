@@ -1,6 +1,6 @@
 # Operator console
 
-Password-gated operator console. The browser talks only to this server. LookCam video is published by the bridge, transcoded here, and played through session-gated WebRTC. HID keys are proxied to a separate relay. The device token stays on that relay.
+Password-gated operator console. The browser talks only to this server. LookCam video is published by the bridge, transcoded here, and played through session-gated WebRTC. HID keys stay in this process and go to the ESP32-S3 on `/ws/device`. The device token never leaves the server.
 
 ## Local run
 
@@ -24,7 +24,7 @@ npm run dev
 
 Set **Base Directory** to `/console` and **Dockerfile Location** to `/Dockerfile` in Coolify. The image builds `web/`, serves it from `src/public`, and listens on `PORT` (image default `3000`) and `HOST` `0.0.0.0`. Set `TRUST_PROXY=1` behind the Coolify proxy. `GET /healthz` is the health check. The runtime image includes ffmpeg for the camera ingest.
 
-Leave `CAPTURE_TOKEN` empty to refuse the capture agent. Leave `HID_URL` empty until the keyboard relay is listening on another port. Do not put `DEVICE_TOKEN` in this service.
+Leave `CAPTURE_TOKEN` empty to refuse the capture agent. Leave `DEVICE_TOKEN` empty to refuse the HID keyboard. The ESP32-S3 dials this service at `/ws/device?token=…` using the same host and port. Set `WS_HOST`, `WS_PORT`, and `DEVICE_TOKEN` in the firmware `secrets.h` to match.
 
 ## Environment
 
@@ -37,8 +37,7 @@ Leave `CAPTURE_TOKEN` empty to refuse the capture agent. Leave `HID_URL` empty u
 | `TRUST_PROXY` | no | `1` behind a reverse proxy |
 | `BRIDGE_TOKEN` | no | Empty refuses LookCam ingest |
 | `LOOKCAM_PASSWORD` | no | Delivered only to the bridge |
-| `HID_URL` | no | Relay base URL, empty disables HID |
-| `HID_GATE_PASSWORD` | with HID_URL | Min 16. Never sent to the browser |
+| `DEVICE_TOKEN` | no | ESP32 `/ws/device` token, min 16. Empty disables HID. Never sent to the browser |
 | `CAPTURE_TOKEN` | no | Empty refuses the capture agent |
 | `GEMINI_API_KEY` | no | Coding agent. Empty disables it. Never sent to the browser |
 | `GEMINI_MODEL` | no | Defaults to `gemini-4-argon` |

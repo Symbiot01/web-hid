@@ -15,8 +15,7 @@ require('dotenv').config();
  *   streamSrtUrl: string,
  *   bridgeToken: string,
  *   lookcamPassword: string,
- *   hidUrl: string,
- *   hidPassword: string,
+ *   deviceToken: string,
  *   captureToken: string,
  *   streamDeskSrtUrl: string,
  *   streamDeskWhepUrl: string,
@@ -65,15 +64,13 @@ function loadConfig() {
     console.error('[fatal] LOOKCAM_PASSWORD is invalid');
     process.exit(1);
   }
-  const hidUrlRaw = (process.env.HID_URL || '').trim();
-  const hidUrl = hidUrlRaw ? httpUrl('HID_URL', hidUrlRaw).replace(/\/$/, '') : '';
-  const hidPassword = process.env.HID_GATE_PASSWORD || '';
-  if (hidUrl && Buffer.byteLength(hidPassword, 'utf8') < 16) {
-    console.error('[fatal] HID_GATE_PASSWORD must be at least 16 characters when HID_URL is set');
+  const deviceToken = process.env.DEVICE_TOKEN || '';
+  if (deviceToken && Buffer.byteLength(deviceToken, 'utf8') < 16) {
+    console.error('[fatal] DEVICE_TOKEN must be at least 16 characters when set');
     process.exit(1);
   }
-  if (/[\u0000-\u001f\u007f]/.test(hidPassword)) {
-    console.error('[fatal] HID_GATE_PASSWORD is invalid');
+  if (/[\u0000-\u001f\u007f]/.test(deviceToken)) {
+    console.error('[fatal] DEVICE_TOKEN is invalid');
     process.exit(1);
   }
   const captureToken = process.env.CAPTURE_TOKEN || '';
@@ -115,8 +112,7 @@ function loadConfig() {
     streamSrtUrl,
     bridgeToken,
     lookcamPassword,
-    hidUrl,
-    hidPassword,
+    deviceToken,
     captureToken,
     streamDeskSrtUrl,
     streamDeskWhepUrl,

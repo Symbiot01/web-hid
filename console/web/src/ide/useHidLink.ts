@@ -95,7 +95,7 @@ export function useHidLink({ connect, watch, liveMode }: Options) {
             pushLog(msg.message.slice(0, 120));
           }
         } catch {
-          // ignore malformed relay messages
+          // ignore malformed status messages
         }
       });
       next.addEventListener('close', () => {

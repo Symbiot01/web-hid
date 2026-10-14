@@ -26,18 +26,18 @@ const {
 } = require('./stream');
 const { createCameraControl } = require('./camera');
 const { createCaptureControl } = require('./capture');
-const { createHidClient, validatePaste } = require('./hid');
+const { createHidControl, validatePaste } = require('./hid');
 const { createAgentControl } = require('./agent');
 
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX = 50;
 
 /**
- * @param {{ config: ReturnType<typeof import('./config').loadConfig>, hid?: ReturnType<typeof createHidClient> }} opts
+ * @param {{ config: ReturnType<typeof import('./config').loadConfig>, hid?: ReturnType<typeof createHidControl> }} opts
  */
 function createApp(opts) {
   const { config } = opts;
-  const hid = opts.hid || createHidClient(config);
+  const hid = opts.hid || createHidControl({ deviceToken: config.deviceToken || '' });
   const app = express();
 
   if (config.trustProxy) {
@@ -335,15 +335,8 @@ function createApp(opts) {
     message: { error: 'Too many HID requests' },
   });
 
-  app.get('/api/hid/status', requireSession(config.sessionSecret), hidLimiter, async (_req, res) => {
-    if (!hid.configured()) return res.status(200).json({ configured: false, deviceConnected: false });
-    try {
-      const result = await hid.status();
-      if (result.status !== 200) return res.status(502).json({ error: 'HID relay is unavailable' });
-      return res.status(200).json({ configured: true, deviceConnected: result.body.deviceConnected });
-    } catch {
-      return res.status(502).json({ error: 'HID relay is unavailable' });
-    }
+  app.get('/api/hid/status', requireSession(config.sessionSecret), hidLimiter, (_req, res) => {
+    res.status(200).json(hid.status());
   });
 
   app.post(
@@ -352,26 +345,23 @@ function createApp(opts) {
     hidLimiter,
     express.json({ limit: '16kb' }),
     async (req, res) => {
-      if (!hid.configured()) return res.status(503).json({ error: 'HID relay is not configured' });
+      if (!hid.configured()) return res.status(503).json({ error: 'HID is not configured' });
       const paste = validatePaste(req.body);
       if ('error' in paste) return res.status(400).json({ error: paste.error });
       try {
         const result = await hid.paste(paste);
-        return res.status(result.status === 200 || result.status === 409 ? result.status : 502).json(result.body);
+        const status = result.status === 200 || result.status === 409 || result.status === 503 ? result.status : 500;
+        return res.status(status).json(result.body);
       } catch {
-        return res.status(502).json({ error: 'HID relay is unavailable' });
+        return res.status(500).json({ error: 'Paste failed' });
       }
     },
   );
 
-  app.post('/api/hid/paste/cancel', requireSession(config.sessionSecret), hidLimiter, async (_req, res) => {
-    if (!hid.configured()) return res.status(503).json({ error: 'HID relay is not configured' });
-    try {
-      await hid.cancel();
-      return res.status(200).json({ ok: true });
-    } catch {
-      return res.status(502).json({ error: 'HID relay is unavailable' });
-    }
+  app.post('/api/hid/paste/cancel', requireSession(config.sessionSecret), hidLimiter, (_req, res) => {
+    if (!hid.configured()) return res.status(503).json({ error: 'HID is not configured' });
+    hid.cancel();
+    return res.status(200).json({ ok: true });
   });
 
   function requireCapture(req, res) {
@@ -491,30 +481,17 @@ function createApp(opts) {
     });
   });
 
-  app.get('/api/hid/paste/progress', requireSession(config.sessionSecret), async (req, res) => {
-    if (!hid.configured()) return res.status(503).json({ error: 'HID relay is not configured' });
-    try {
-      const upstream = await hid.openProgress();
-      if (!upstream.ok || !upstream.body) return res.status(502).json({ error: 'HID relay is unavailable' });
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache, no-transform');
-      res.setHeader('Connection', 'keep-alive');
-      res.flushHeaders();
-      const reader = upstream.body.getReader();
-      req.on('close', () => {
-        reader.cancel().catch(() => undefined);
-      });
-      while (true) {
-        const chunk = await reader.read();
-        if (chunk.done || res.writableEnded) break;
-        res.write(Buffer.from(chunk.value));
-      }
-      res.end();
-      return undefined;
-    } catch {
-      if (!res.headersSent) return res.status(502).json({ error: 'HID relay is unavailable' });
-      return undefined;
-    }
+  app.get('/api/hid/paste/progress', requireSession(config.sessionSecret), (req, res) => {
+    if (!hid.configured()) return res.status(503).json({ error: 'HID is not configured' });
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+    const unsubscribe = hid.subscribeProgress((progress) => {
+      if (!res.writableEnded) res.write(`data: ${JSON.stringify(progress)}\n\n`);
+    });
+    req.on('close', unsubscribe);
+    return undefined;
   });
 
   app.get('/api/agent', requireSession(config.sessionSecret), (_req, res) => {
