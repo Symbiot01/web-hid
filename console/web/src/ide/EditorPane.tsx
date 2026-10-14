@@ -21,7 +21,7 @@ type Props = {
   view: 'editor' | 'stream';
   onView: (view: 'editor' | 'stream') => void;
   stream: 2 | 3;
-  onStream: (stream: 2 | 3) => void;
+  reconnectSeq: number;
   continuous: boolean;
   onHidKey: (phase: 'down' | 'up', code: string) => void;
   liveMode: LiveMode | null;
@@ -49,7 +49,7 @@ export function EditorPane({
   view,
   onView,
   stream,
-  onStream,
+  reconnectSeq,
   continuous,
   onHidKey,
   liveMode,
@@ -331,12 +331,9 @@ export function EditorPane({
           <StreamPane
             active={view === 'stream'}
             stream={stream}
-            onStream={onStream}
+            reconnectSeq={reconnectSeq}
             liveMode={liveMode}
-            onLive={onLive}
-            onLeave={onLeaveLive}
             sendFrame={sendFrame}
-            onSnap={onSnap}
             onBindVideoGrabber={onBindVideoGrabber}
           />
         </div>

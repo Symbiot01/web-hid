@@ -10,37 +10,23 @@ const RETRY_MS = [3000, 8000, 15000];
 type Props = {
   active: boolean;
   stream: 2 | 3;
-  onStream: (stream: 2 | 3) => void;
+  reconnectSeq: number;
   liveMode: LiveMode | null;
-  onLive: (mode: LiveMode) => void;
-  onLeave: () => void;
   sendFrame: (buf: ArrayBuffer | null) => boolean;
-  onSnap: (kind: 'frame' | 'agent', target?: 'agent' | 'save', resetFirst?: boolean) => Promise<string>;
   onBindVideoGrabber: (fn: (() => Promise<Blob | null>) | null) => void;
 };
 
 export function StreamPane({
   active,
   stream,
-  onStream,
+  reconnectSeq,
   liveMode,
-  onLive,
-  onLeave,
   sendFrame,
-  onSnap,
   onBindVideoGrabber,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [status, setStatus] = useState<Status>('offline');
   const [detail, setDetail] = useState('No signal');
-  const [nonce, setNonce] = useState(0);
-  const [busyCmd, setBusyCmd] = useState(false);
-  const [capturing, setCapturing] = useState<string | null>(null);
-  const [brightness, setBrightness] = useState(35);
-  const [showPicture, setShowPicture] = useState(false);
-  const [resetOnCapture, setResetOnCapture] = useState(false);
-  const [capturedCount, setCapturedCount] = useState(0);
-  const [note, setNote] = useState('');
   const stageRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef(stream);
   const liveRef = useRef(liveMode);
@@ -177,7 +163,7 @@ export function StreamPane({
       for (const track of mediaStream.getTracks()) track.stop();
       void session?.stop();
     };
-  }, [active, nonce]);
+  }, [active, reconnectSeq, stream]);
 
   useEffect(() => {
     if (!active || !liveMode) return;
@@ -233,60 +219,6 @@ export function StreamPane({
     void stage.requestPointerLock();
   }
 
-  async function runCameraCommand(name: string, args?: Record<string, unknown>, label?: string) {
-    if (busyCmd) return;
-    setBusyCmd(true);
-    setNote(label ? `${label}…` : `${name}…`);
-    try {
-      const res = await fetch('/api/camera/command', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, args: args ?? {} }),
-      });
-      const body = (await res.json().catch(() => ({}))) as { ok?: boolean; detail?: string; error?: string };
-      if (!res.ok) {
-        setNote(body.error || `${label || name} failed`);
-        return;
-      }
-      setNote(body.detail || `${label || name} applied`);
-      if (name === 'reconnect') {
-        window.setTimeout(() => setNonce((n) => n + 1), 1200);
-      }
-    } catch {
-      setNote(`${label || name} failed`);
-    } finally {
-      setBusyCmd(false);
-    }
-  }
-
-  async function runSnap(kind: 'frame' | 'agent', target: 'agent' | 'save') {
-    if (capturing) return;
-    const key = `${kind}-${target}`;
-    setCapturing(key);
-    try {
-      const shouldReset = target === 'agent' && resetOnCapture;
-      const resultMsg = await onSnap(kind, target, shouldReset);
-      setNote(resultMsg);
-      if (target === 'agent' && !resultMsg.toLowerCase().includes('failed')) {
-        if (shouldReset) {
-          setResetOnCapture(false);
-          setCapturedCount(1);
-        } else {
-          setCapturedCount((prev) => prev + 1);
-        }
-      }
-    } finally {
-      setCapturing(null);
-    }
-  }
-
-  function switchStream(nextStream: 2 | 3) {
-    onStream(nextStream);
-    setNote(`Switched to Stream ${nextStream}`);
-    window.setTimeout(() => setNonce((n) => n + 1), 350);
-  }
-
   return (
     <div
       ref={stageRef}
@@ -295,175 +227,11 @@ export function StreamPane({
     >
       <video ref={videoRef} autoPlay playsInline muted />
 
-      <div className="ide-stream-hud" onClick={(event) => event.stopPropagation()}>
-        <div className="ide-stream-hud-group" role="group" aria-label="Capture controls">
-          <button
-            type="button"
-            className="btn primary ide-mini"
-            disabled={capturing !== null}
-            onClick={() => void runSnap('frame', 'agent')}
-            title="Snap Frame: grab frame from live stream (or RTSP) and attach directly to Agent"
-          >
-            {capturing === 'frame-agent'
-              ? 'Snapping…'
-              : `+ Snap Frame → Agent${capturedCount > 0 ? ` (${capturedCount})` : ''}`}
-          </button>
-          <button
-            type="button"
-            className="btn primary ide-mini"
-            disabled={capturing !== null}
-            onClick={() => void runSnap('agent', 'agent')}
-            title="Snap Agent: ask the remote Capture Agent for a high-res photo and attach directly to Agent"
-          >
-            {capturing === 'agent-agent' ? 'Snapping…' : '+ Snap Agent → Agent'}
-          </button>
-          <button
-            type="button"
-            className="btn ghost ide-mini"
-            disabled={capturing !== null}
-            onClick={() => void runSnap('frame', 'save')}
-            title="Download stream frame to disk"
-          >
-            {capturing === 'frame-save' ? 'Saving…' : 'Save Frame'}
-          </button>
-          <button
-            type="button"
-            className="btn ghost ide-mini"
-            disabled={capturing !== null}
-            onClick={() => void runSnap('agent', 'save')}
-            title="Download capture agent photo to disk"
-          >
-            {capturing === 'agent-save' ? 'Saving…' : 'Save Agent'}
-          </button>
-          <label className="ide-stream-hud-check" title="Reset Agent problem before attaching the next capture">
-            <input
-              type="checkbox"
-              checked={resetOnCapture}
-              onChange={(event) => setResetOnCapture(event.target.checked)}
-            />
-            New problem
-          </label>
-        </div>
-
-        <div className="ide-stream-hud-group" role="group" aria-label="Orientation and picture">
-          <button
-            type="button"
-            className="btn ghost ide-mini"
-            disabled={busyCmd}
-            onClick={() => void runCameraCommand('LevelFlip', {}, 'Flip H')}
-            title="Flip camera horizontally (mirror)"
-          >
-            Flip H
-          </button>
-          <button
-            type="button"
-            className="btn ghost ide-mini"
-            disabled={busyCmd}
-            onClick={() => void runCameraCommand('VerticalFlip', {}, 'Flip V')}
-            title="Flip camera vertically (upside down)"
-          >
-            Flip V
-          </button>
-          <button
-            type="button"
-            className={`btn ghost ide-mini${showPicture ? ' active' : ''}`}
-            onClick={() => setShowPicture((open) => !open)}
-            title="Adjust camera brightness"
-          >
-            Brightness ({brightness})
-          </button>
-        </div>
-
-        <div className="ide-stream-hud-group" role="group" aria-label="Reconnect and recovery">
-          <button
-            type="button"
-            className="btn ghost ide-mini"
-            onClick={() => {
-              setNote('Reconnecting WebRTC player…');
-              setNonce((value) => value + 1);
-            }}
-            title="Step 1: Reconnect WebRTC video player"
-          >
-            Reconnect Player
-          </button>
-          <button
-            type="button"
-            className="btn ghost ide-mini"
-            onClick={() => switchStream(stream === 2 ? 3 : 2)}
-            title="Step 2: Switch between camera Stream 2 and Stream 3"
-          >
-            Stream {stream} → {stream === 2 ? 3 : 2}
-          </button>
-          <button
-            type="button"
-            className="btn ghost ide-mini"
-            disabled={busyCmd}
-            onClick={() => void runCameraCommand('reconnect', {}, 'Recover Bridge')}
-            title="Step 3: Tell camera bridge to drop and re-establish UDP session"
-          >
-            Recover Bridge
-          </button>
-          {liveMode ? (
-            <button type="button" className="btn ghost ide-mini" onClick={onLeave}>
-              Leave Live ({liveMode})
-            </button>
-          ) : (
-            <button type="button" className="btn ghost ide-mini" onClick={() => onLive('typing')}>
-              Live Keys
-            </button>
-          )}
-        </div>
-      </div>
-
-      {showPicture ? (
-        <div className="ide-stream-popover" onClick={(event) => event.stopPropagation()}>
-          <label className="ide-stream-slider">
-            <span>
-              Brightness <strong>{brightness}</strong>
-            </span>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              step={5}
-              value={brightness}
-              disabled={busyCmd}
-              onChange={(event) => setBrightness(Number(event.target.value))}
-            />
-          </label>
-          <div className="ide-stream-popover-actions">
-            {[20, 40, 60, 80].map((preset) => (
-              <button
-                key={preset}
-                type="button"
-                className="btn ghost ide-mini"
-                disabled={busyCmd}
-                onClick={() => {
-                  setBrightness(preset);
-                  void runCameraCommand('SetDevVideoInfo', { brightness: preset }, `Brightness ${preset}`);
-                }}
-              >
-                {preset}%
-              </button>
-            ))}
-            <button
-              type="button"
-              className="btn primary ide-mini"
-              disabled={busyCmd}
-              onClick={() => void runCameraCommand('SetDevVideoInfo', { brightness }, `Brightness ${brightness}`)}
-            >
-              Apply
-            </button>
-          </div>
-        </div>
-      ) : null}
-
       <div className="ide-stream-footer" onClick={(event) => event.stopPropagation()}>
         <span className={`ide-stream-status ide-stream-${status}`}>
           <span className="ide-stream-dot" aria-hidden="true" />
           {detail}
         </span>
-        {note ? <span className="ide-stream-note">{note}</span> : null}
         {liveMode ? (
           <span className="ide-stream-note">Click video to lock mouse pointer · Esc unlocks</span>
         ) : null}

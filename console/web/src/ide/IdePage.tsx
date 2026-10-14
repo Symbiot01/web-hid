@@ -111,6 +111,7 @@ export function IdePage({ busy, onLogout }: Props) {
   const [running, setRunning] = useState<'program' | 'tests' | null>(null);
   const [editorView, setEditorView] = useState<'editor' | 'stream'>('editor');
   const [cameraStream, setCameraStream] = useState<2 | 3>(2);
+  const [streamReconnectSeq, setStreamReconnectSeq] = useState(0);
   const [hidContinuous, setHidContinuous] = useState(false);
   const [bottomTab, setBottomTab] = useState<'terminal' | 'camera' | 'hid'>('terminal');
   const [liveMode, setLiveMode] = useState<LiveMode | null>(null);
@@ -671,7 +672,7 @@ export function IdePage({ busy, onLogout }: Props) {
                 view={editorView}
                 onView={showView}
                 stream={cameraStream}
-                onStream={setCameraStream}
+                reconnectSeq={streamReconnectSeq}
                 continuous={hidContinuous}
                 onHidKey={(phase, code) => hidSend.current(phase, code)}
                 liveMode={liveMode}
@@ -692,7 +693,10 @@ export function IdePage({ busy, onLogout }: Props) {
                 onTab={setBottomTab}
                 stream={cameraStream}
                 onStream={setCameraStream}
-                onOpenStream={() => setEditorView('stream')}
+                onOpenStream={() => {
+                  setEditorView('stream');
+                  setStreamReconnectSeq((seq) => seq + 1);
+                }}
                 onSnap={snap}
                 continuous={hidContinuous}
                 liveMode={liveMode}
