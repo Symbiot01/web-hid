@@ -86,7 +86,7 @@ function createApp(opts) {
         return executeRun(body);
       },
     });
-  const agentJson = express.json({ limit: '6mb' });
+  const agentJson = express.json({ limit: '24mb' });
   const agentLimiter = rateLimit({
     windowMs: 60 * 1000,
     max: 12,
@@ -528,11 +528,18 @@ function createApp(opts) {
         typeof body.imageBase64 === 'string' && body.imageBase64
           ? { mime: body.mime, data: body.imageBase64 }
           : null;
+      const images = Array.isArray(body.images)
+        ? body.images.map((item) => ({
+            mime: item && item.mime,
+            data: item && (item.data || item.base64),
+          }))
+        : undefined;
       const view = await agent.begin({
         text: body.text,
         hint: body.hint,
         source: body.source,
         image,
+        images,
       });
       return res.status(200).json(view);
     } catch (error) {
@@ -543,11 +550,23 @@ function createApp(opts) {
   app.post('/api/agent/guide', requireSession(config.sessionSecret), agentLimiter, agentJson, async (req, res) => {
     try {
       const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const image =
+        typeof body.imageBase64 === 'string' && body.imageBase64
+          ? { mime: body.mime, data: body.imageBase64 }
+          : null;
+      const images = Array.isArray(body.images)
+        ? body.images.map((item) => ({
+            mime: item && item.mime,
+            data: item && (item.data || item.base64),
+          }))
+        : undefined;
       const view = await agent.guide({
         text: body.text,
         action: body.action,
         source: body.source,
         cases: body.cases,
+        image,
+        images,
       });
       return res.status(200).json(view);
     } catch (error) {

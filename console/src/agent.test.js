@@ -331,6 +331,72 @@ test('adds edge test cases on user request and re-runs the test suite', async ()
   assert.equal(expanded.cases.every((c) => c.status === 'pass'), true);
 });
 
+test('combines multiple images at start and when follow-up screenshots are added', async () => {
+  const seenImages = [];
+  const jpeg1 = { mime: 'image/jpeg', data: Buffer.from([0xff, 0xd8, 0xff, 0x01]).toString('base64') };
+  const jpeg2 = { mime: 'image/jpeg', data: Buffer.from([0xff, 0xd8, 0xff, 0x02]).toString('base64') };
+  const jpeg3 = { mime: 'image/jpeg', data: Buffer.from([0xff, 0xd8, 0xff, 0x03]).toString('base64') };
+  const steps = {
+    identify: [
+      {
+        title: 'Two Sum',
+        statement: 'Part 1: Given array nums and target.',
+        casesFromProblem: true,
+        cases: [{ input: 'nums = [2,7,11,15], target = 9\n', expected: '[0,1]\n' }],
+        plan: 'Hash map lookup.',
+        functionName: 'twoSum',
+        signature: 'vector<int> twoSum(vector<int>& nums, int target)',
+        format: 'nums = [...], target = k -> [i,j]',
+      },
+      {
+        title: 'Two Sum',
+        statement: 'Part 1 + Part 2: Given array nums and target, return indices. Constraints: 2 <= nums.length <= 10^4.',
+        casesFromProblem: true,
+        cases: [
+          { input: 'nums = [2,7,11,15], target = 9\n', expected: '[0,1]\n' },
+          { input: 'nums = [3,2,4], target = 6\n', expected: '[1,2]\n' },
+        ],
+        plan: 'One-pass hash map.',
+        functionName: 'twoSum',
+        signature: 'vector<int> twoSum(vector<int>& nums, int target)',
+        format: 'nums = [...], target = k -> [i,j]',
+      },
+    ],
+    review: [{ ok: true, reason: '' }],
+    solve: [
+      {
+        source: 'int twoSum(int a){return a;}\nint main(){return twoSum(0);}\n',
+        approach: 'Hash map.',
+      },
+    ],
+    retry: [
+      {
+        source: 'int twoSum(int a){return a;}\nint main(){return twoSum(0);}\n',
+        approach: 'Updated hash map with constraints.',
+      },
+    ],
+  };
+  const agent = createAgentControl({
+    apiKey: KEY,
+    generate: async (task, ctx) => {
+      if (task === 'identify') seenImages.push((ctx.images || []).length);
+      return steps[task].shift();
+    },
+    run: async (_src, cases) => ({
+      status: 'ran',
+      compile: { ok: true, stderr: '' },
+      cases: cases.map((c) => ({ status: 'pass', actual: c.expected, reason: null, timeMs: 4 })),
+    }),
+  });
+  const first = await agent.begin({ text: 'Part 1 & 2', images: [jpeg1, jpeg2] });
+  assert.equal(first.phase, 'solved');
+  assert.equal(first.cases.length, 1);
+  const second = await agent.guide({ text: 'Here is the rest of the examples', images: [jpeg3], cases: first.cases });
+  assert.equal(second.phase, 'solved');
+  assert.equal(second.cases.length, 2);
+  assert.deepEqual(seenImages, [2, 3]);
+});
+
 test('ask does not return source', async () => {
   const { agent } = harness(
     {

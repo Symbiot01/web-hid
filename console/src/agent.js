@@ -7,6 +7,7 @@ const CASE_LIMIT = 12;
 const TEXT_LIMIT = 8_000;
 const SOURCE_LIMIT = 64 * 1024;
 const IMAGE_MAX = 4 * 1024 * 1024;
+const MAX_IMAGES = 6;
 const OUTPUT_LIMIT = 12_000;
 
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -316,6 +317,22 @@ function imageOk(image) {
   return bytes.slice(0, 4).toString('ascii') === 'RIFF' && bytes.slice(8, 12).toString('ascii') === 'WEBP';
 }
 
+function normalizeImages(input) {
+  const list = [];
+  if (input && Array.isArray(input.images)) {
+    for (const item of input.images) {
+      if (item) list.push(item);
+    }
+  } else if (input && input.image) {
+    list.push(input.image);
+  }
+  if (list.length > MAX_IMAGES) return { ok: false, images: [] };
+  for (const item of list) {
+    if (!imageOk(item)) return { ok: false, images: [] };
+  }
+  return { ok: true, images: list };
+}
+
 function parseModelJson(text) {
   const trimmed = String(text || '')
     .trim()
@@ -440,19 +457,23 @@ function promptFor(task, context) {
   const format = clip(context.format, 1_000) || 'Match the exact input and expected output text in Cases.';
 
   if (task === 'identify') {
+    const prior = statement
+      ? `\n\nExisting problem context (combine with the new image(s)/text):\n${statement}\n\nExisting cases:\n${cases}`
+      : '';
     return {
       system: [
         'You extract programming problems from text or screenshots across any platform (LeetCode, Codeforces, AtCoder, CSES, ICPC, HackerRank, or custom specifications).',
+        'If multiple images/screenshots are provided, they show different parts of the SAME problem (e.g., problem description, examples, constraints, and starter code template). Combine all images and any existing problem context into one complete, unified specification.',
         'Reply with JSON only: {"title":"","statement":"","casesFromProblem":false,"cases":[{"input":"","expected":""}],"plan":"","functionName":"","signature":"","format":""}.',
         '- title: short problem title (e.g. "Median of Two Sorted Arrays", "Shortest Routes I").',
-        '- statement: complete, clean problem statement including input/output rules, constraints, and edge conditions.',
-        '- casesFromProblem / cases: copy sample inputs and outputs verbatim ONLY when shown in the problem. If none are shown, set casesFromProblem to false and cases to []. Never guess or invent sample outputs here.',
+        '- statement: complete, clean problem statement combining all parts, including input/output rules, constraints, and edge conditions.',
+        '- casesFromProblem / cases: copy all sample inputs and outputs verbatim across all provided screenshots/context ONLY when shown in the problem. If none are shown, set casesFromProblem to false and cases to []. Never guess or invent sample outputs here.',
         '- functionName: exact method/function name if the problem specifies a class/function signature (e.g. "findMedianSortedArrays", "threeSum", "mergeKLists"). If the problem is a multi-method design class (like LRUCache) or standard stdin/stdout competitive programming, set functionName to "solve".',
         '- signature: full C++17 signature for that function (e.g. "double findMedianSortedArrays(vector<int>& nums1, vector<int>& nums2)", "ListNode* reverseKGroup(ListNode* head, int k)", or "void solve(istream& in, ostream& out)").',
         '- format: precise description of the exact case input syntax (e.g. labeled assignments `nums1 = [1,3], nums2 = [2]`, 2D brackets `grid = [[1,0],[0,1]]`, level-order tree `[1,null,2,3]`, or raw whitespace-separated numbers) and exact expected output syntax (e.g. fixed 5 decimals `2.00000`, `[a,b]`, `true`/`false`, `YES`/`NO`, or space/newline-separated values).',
         '- plan: 1-2 sentences stating the optimal algorithm and its time and space complexity.',
       ].join('\n'),
-      user: `Problem text:\n${clip(context.text, 12_000)}\n\nCurrent editor file:\n${source}`,
+      user: `Problem text:\n${clip(context.text, 12_000)}${prior}\n\nCurrent editor file:\n${source}`,
     };
   }
   if (task === 'review') {
@@ -539,8 +560,15 @@ function createGemini({ apiKey, model, fetchImpl }) {
   async function generate(task, context) {
     const built = promptFor(task, context);
     const parts = [{ text: built.user }];
-    if (context.image) {
-      parts.push({ inline_data: { mime_type: context.image.mime, data: context.image.data } });
+    const imageList = Array.isArray(context.images)
+      ? context.images
+      : context.image
+        ? [context.image]
+        : [];
+    for (const img of imageList) {
+      if (img && img.mime && img.data) {
+        parts.push({ inline_data: { mime_type: img.mime, data: img.data } });
+      }
     }
     let lastError = null;
     for (let tryNum = 0; tryNum < 2; tryNum += 1) {
@@ -636,6 +664,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
     casesFromProblem: false,
     casesVerified: false,
     cases: [],
+    images: [],
     source: '',
     approach: '',
     hint: '',
@@ -944,6 +973,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
     state.casesFromProblem = false;
     state.casesVerified = false;
     state.cases = [];
+    state.images = [];
     state.source = '';
     state.approach = '';
     state.hint = '';
@@ -959,9 +989,10 @@ function createAgentControl({ apiKey, model, generate, run }) {
     if (secret.length < 20) refuse(503, 'Agent is not configured');
     if (state.running) refuse(409, 'Agent is already working');
     const text = clip(input && input.text, 12_000);
-    const image = input && input.image ? input.image : null;
-    if (!text && !image) refuse(400, 'Send a question or an image');
-    if (!imageOk(image)) refuse(400, 'Image must be a JPEG, PNG, or WebP under 4 MB');
+    const parsedImages = normalizeImages(input);
+    if (!parsedImages.ok) refuse(400, `Up to ${MAX_IMAGES} JPEG, PNG, or WebP images under 4 MB each`);
+    const images = parsedImages.images;
+    if (!text && images.length === 0) refuse(400, 'Send a question or an image');
     state.running = true;
     state.phase = 'working';
     state.step = 'identify';
@@ -974,6 +1005,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
     state.casesFromProblem = false;
     state.casesVerified = false;
     state.cases = [];
+    state.images = images;
     state.source = '';
     state.approach = '';
     state.failure = '';
@@ -981,9 +1013,16 @@ function createAgentControl({ apiKey, model, generate, run }) {
     state.hint = clip(input.hint, 4_000);
     state.pendingHint = '';
     state.stopForCases = false;
-    state.messages = [{ role: 'user', text: redact(text || 'Image attached', secret), kind: 'user' }];
+    const attachmentLabel = images.length > 1 ? `${images.length} images attached` : 'Image attached';
+    const userLabel = text && images.length > 0 ? `${text}\n(${attachmentLabel})` : text || attachmentLabel;
+    state.messages = [{ role: 'user', text: redact(userLabel, secret), kind: 'user' }];
     try {
-      const found = await talk('identify', { text, image, source: clip(input.source, SOURCE_LIMIT) });
+      const found = await talk('identify', {
+        text,
+        image: images[0] || null,
+        images,
+        source: clip(input.source, SOURCE_LIMIT),
+      });
       state.title = clip(found.title, 160);
       state.statement = clip(found.statement, 12_000);
       state.casesFromProblem = found.casesFromProblem === true;
@@ -1059,8 +1098,11 @@ function createAgentControl({ apiKey, model, generate, run }) {
       return reset();
     }
     const text = clip(input && input.text, 4_000);
+    const parsedImages = normalizeImages(input);
+    if (!parsedImages.ok) refuse(400, `Up to ${MAX_IMAGES} JPEG, PNG, or WebP images under 4 MB each`);
+    const extraImages = parsedImages.images;
     if (state.running) {
-      if (!text && action !== 'retry' && action !== 'cases_wrong' && action !== 'more_cases') {
+      if (!text && extraImages.length === 0 && action !== 'retry' && action !== 'cases_wrong' && action !== 'more_cases') {
         refuse(400, 'Send an approach or some context');
       }
       if (action === 'cases_wrong') {
@@ -1068,12 +1110,15 @@ function createAgentControl({ apiKey, model, generate, run }) {
         say('I will pause after this run if any test case fails.');
         return snapshot();
       }
+      if (extraImages.length > 0) {
+        state.images = [...state.images, ...extraImages].slice(-MAX_IMAGES);
+      }
       state.pendingHint =
         action === 'retry'
           ? 'Try a different approach.'
           : action === 'more_cases'
             ? 'Add more edge test cases.'
-            : text;
+            : text || 'Use the newly attached problem screenshot(s) as well.';
       say('Queued your guidance for the next attempt.');
       return snapshot();
     }
@@ -1100,6 +1145,73 @@ function createAgentControl({ apiKey, model, generate, run }) {
           status: unchanged ? prev.status || 'idle' : 'idle',
         };
       });
+    }
+    if (extraImages.length > 0) {
+      state.images = [...state.images, ...extraImages].slice(-MAX_IMAGES);
+      const attachmentLabel = extraImages.length > 1 ? `${extraImages.length} images attached` : 'Image attached';
+      const userMsg = text ? `${text}\n(${attachmentLabel})` : attachmentLabel;
+      state.running = true;
+      state.phase = 'working';
+      state.step = 'identify';
+      state.messages.push({ role: 'user', text: redact(userMsg, secret), kind: 'user' });
+      try {
+        say(
+          `Combining ${extraImages.length} additional screenshot${extraImages.length === 1 ? '' : 's'} with the current problem (${state.images.length} total).`,
+        );
+        const merged = await talk('identify', {
+          text,
+          statement: state.statement,
+          cases: state.cases,
+          image: state.images[0] || null,
+          images: state.images,
+          source: state.source,
+        });
+        if (merged && merged.title) state.title = clip(merged.title, 160);
+        if (merged && merged.statement) {
+          state.statement = clip(merged.statement, 12_000);
+          say(state.statement, 'problem');
+        }
+        if (merged && merged.functionName) {
+          const nextEntry = entryFunction(merged.functionName);
+          if (nextEntry !== state.entry) {
+            state.entry = nextEntry;
+            state.source = '';
+          }
+        }
+        if (merged && merged.signature) state.signature = clip(merged.signature, 300);
+        if (merged && merged.format) state.format = clip(merged.format, 1_000);
+        if (merged && merged.casesFromProblem && validCases(merged.cases)) {
+          const seen = new Set(state.cases.map((item) => item.input.trim()));
+          for (const item of merged.cases) {
+            const key = item.input.trim();
+            if (!key || seen.has(key) || state.cases.length >= CASE_LIMIT) continue;
+            seen.add(key);
+            state.cases.push({
+              input: item.input,
+              expected: item.expected,
+              actual: '',
+              stderr: '',
+              reason: null,
+              timeMs: 0,
+              status: 'idle',
+            });
+          }
+        }
+        if (merged && merged.plan) {
+          state.approach = clip(merged.plan, 1_000);
+        }
+        state.hint = text || 'Use all combined problem parts, constraints, and sample cases.';
+        await writeAndRun(state.source ? 'retry' : 'solve');
+        if (state.phase === 'working') state.phase = 'needs_human';
+        return snapshot();
+      } catch (error) {
+        state.phase = 'needs_human';
+        say(error.status ? error.message : 'The agent stopped');
+        if (error.status && error.status < 500) throw error;
+        return snapshot();
+      } finally {
+        state.running = false;
+      }
     }
     if (wantsMoreCases(text, action)) {
       const userMsg = text || 'Add more edge test cases for thorough testing.';
@@ -1156,6 +1268,7 @@ module.exports = {
   createGemini,
   parseModelJson,
   imageOk,
+  normalizeImages,
   redact,
   entryFunction,
   sourceHasEntry,

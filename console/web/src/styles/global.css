@@ -935,6 +935,13 @@ textarea:focus-visible {
   gap: 6px;
 }
 
+.ide-compose-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+
 .ide-compose-left,
 .ide-case-meta {
   display: flex;

@@ -380,7 +380,7 @@ export function IdePage({ busy, onLogout }: Props) {
     return () => window.clearInterval(timer);
   }, [agentPhase]);
 
-  async function send(text: string, image: { mime: string; base64: string } | null) {
+  async function send(text: string, images: { mime: string; base64: string }[]) {
     const active = tabs.find((tab) => tab.id === activeTabId);
     if (mode === 'agent') setAgentPhase('working');
     try {
@@ -400,18 +400,29 @@ export function IdePage({ busy, onLogout }: Props) {
         setAgentPhase('idle');
         return;
       }
-      const starting = agentPhase === 'idle' || image !== null;
+      const starting = agentPhase === 'idle';
+      const serializedImages = images.map((item) => ({ mime: item.mime, data: item.base64 }));
       const response = await fetch(starting ? '/api/agent' : '/api/agent/guide', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(
           starting
-            ? { text, hint: '', source: active?.value ?? '', imageBase64: image?.base64, mime: image?.mime }
+            ? {
+                text,
+                hint: '',
+                source: active?.value ?? '',
+                images: serializedImages,
+                imageBase64: images[0]?.base64,
+                mime: images[0]?.mime,
+              }
             : {
                 text,
                 source: active?.value ?? '',
                 cases: cases.map((item) => ({ input: item.input, expected: item.expected })),
+                images: serializedImages,
+                imageBase64: images[0]?.base64,
+                mime: images[0]?.mime,
               },
         ),
       });

@@ -10,6 +10,11 @@ import {
 import type { AgentKind, AgentMessage, AgentMode, AgentPhase, AgentStep, TestCase } from './types.ts';
 
 type ImagePayload = { mime: string; base64: string };
+type ImageItem = ImagePayload & { id: string; name: string };
+
+const MAX_IMAGES = 6;
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
 type Props = {
   mode: AgentMode;
@@ -24,7 +29,7 @@ type Props = {
   configured: boolean;
   messages: AgentMessage[];
   onMode: (mode: AgentMode) => void;
-  onSend: (text: string, image: ImagePayload | null) => void;
+  onSend: (text: string, images: ImagePayload[]) => void;
   onAction: (action: 'retry' | 'cases_wrong' | 'more_cases' | 'reset') => void;
 };
 
@@ -124,10 +129,11 @@ export function AgentPane({
   onAction,
 }: Props) {
   const [draft, setDraft] = useState('');
-  const [imageName, setImageName] = useState('');
-  const [image, setImage] = useState<ImagePayload | null>(null);
+  const [images, setImages] = useState<ImageItem[]>([]);
+  const [imageNotice, setImageNotice] = useState('');
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
+  const imgCounter = useRef(0);
   const fileRef = useRef<HTMLInputElement>(null);
   const feedRef = useRef<HTMLOListElement>(null);
   const working = phase === 'working';
@@ -146,60 +152,94 @@ export function AgentPane({
     el.scrollTop = el.scrollHeight;
   }, [messages.length, phase]);
 
-  function submit(event: FormEvent) {
-    event.preventDefault();
+  function sendDraft() {
     const text = draft.trim();
-    if (!text && !image) return;
-    onSend(text, image);
+    if (!text && images.length === 0) return;
+    onSend(
+      text,
+      images.map(({ mime, base64 }) => ({ mime, base64 })),
+    );
     setDraft('');
-    setImage(null);
-    setImageName('');
+    setImages([]);
+    setImageNotice('');
     if (fileRef.current) fileRef.current.value = '';
   }
 
-  function chooseImage(file: File | undefined, fallbackName?: string) {
-    if (!file) return;
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 4 * 1024 * 1024) {
-      setImage(null);
-      setImageName('Use a JPEG, PNG, or WebP under 4 MB');
-      return;
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    sendDraft();
+  }
+
+  function addFiles(fileList: File[] | FileList | null | undefined, prefix = 'part') {
+    if (!fileList || fileList.length === 0) return;
+    const incoming = Array.from(fileList);
+    const valid: File[] = [];
+    let rejected = false;
+    for (const file of incoming) {
+      if (!ALLOWED_IMAGE_TYPES.includes(file.type) || file.size > MAX_IMAGE_BYTES) {
+        rejected = true;
+      } else {
+        valid.push(file);
+      }
     }
+    if (rejected) {
+      setImageNotice('Each image must be JPEG, PNG, or WebP under 4 MB');
+    } else {
+      setImageNotice('');
+    }
+    if (valid.length === 0) return;
     if (mode !== 'agent') {
       onMode('agent');
     }
-    const ext = file.type === 'image/jpeg' ? 'jpg' : file.type === 'image/webp' ? 'webp' : 'png';
-    const label = file.name && file.name !== 'image.png' ? file.name : fallbackName || `clipboard.${ext}`;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const value = typeof reader.result === 'string' ? reader.result : '';
-      const base64 = value.slice(value.indexOf(',') + 1);
-      setImage({ mime: file.type, base64 });
-      setImageName(label);
-    };
-    reader.readAsDataURL(file);
+    for (const file of valid) {
+      const ext = file.type === 'image/jpeg' ? 'jpg' : file.type === 'image/webp' ? 'webp' : 'png';
+      imgCounter.current += 1;
+      const seq = imgCounter.current;
+      const label =
+        file.name && file.name !== 'image.png' ? file.name : `${prefix}-${seq}.${ext}`;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const value = typeof reader.result === 'string' ? reader.result : '';
+        const base64 = value.slice(value.indexOf(',') + 1);
+        setImages((prev) => {
+          if (prev.length >= MAX_IMAGES) {
+            setImageNotice(`Maximum ${MAX_IMAGES} images per problem`);
+            return prev;
+          }
+          return [...prev, { id: `img-${seq}-${Date.now()}`, name: label, mime: file.type, base64 }];
+        });
+      };
+      reader.readAsDataURL(file);
+    }
+    if (fileRef.current) fileRef.current.value = '';
+  }
+
+  function removeImage(id: string) {
+    setImages((prev) => prev.filter((item) => item.id !== id));
+    setImageNotice('');
   }
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     if (!configured) return;
+    const collected: File[] = [];
     const items = event.clipboardData?.items;
     if (items) {
       for (let i = 0; i < items.length; i += 1) {
         const item = items[i];
         if (item.kind === 'file' && item.type.startsWith('image/')) {
           const file = item.getAsFile();
-          if (file) {
-            event.preventDefault();
-            const ext = file.type === 'image/jpeg' ? 'jpg' : file.type === 'image/webp' ? 'webp' : 'png';
-            chooseImage(file, `pasted-image.${ext}`);
-            return;
-          }
+          if (file) collected.push(file);
         }
       }
     }
-    const files = event.clipboardData?.files;
-    if (files && files.length > 0 && files[0].type.startsWith('image/')) {
+    if (collected.length === 0 && event.clipboardData?.files) {
+      for (const file of Array.from(event.clipboardData.files)) {
+        if (file.type.startsWith('image/')) collected.push(file);
+      }
+    }
+    if (collected.length > 0) {
       event.preventDefault();
-      chooseImage(files[0], 'pasted-image.png');
+      addFiles(collected, 'pasted');
     }
   }
 
@@ -235,8 +275,8 @@ export function AgentPane({
     setDragging(false);
     const files = event.dataTransfer?.files;
     if (!files || files.length === 0) return;
-    const imgFile = Array.from(files).find((item) => item.type.startsWith('image/')) ?? files[0];
-    chooseImage(imgFile, imgFile.name || 'dropped-image.png');
+    const imageFiles = Array.from(files).filter((item) => item.type.startsWith('image/'));
+    addFiles(imageFiles.length > 0 ? imageFiles : files, 'dropped');
   }
 
   function body(message: AgentMessage) {
@@ -386,30 +426,49 @@ export function AgentPane({
           disabled={!configured || (working && mode === 'ask')}
           placeholder={
             dragging
-              ? 'Drop image (PNG, JPEG, WebP) here to attach…'
+              ? 'Drop one or more images (PNG, JPEG, WebP) here to attach…'
               : mode === 'ask'
-                ? 'Ask about this code, or Ctrl+V / drop a problem screenshot…'
+                ? 'Ask about this code, or Ctrl+V / drop problem screenshots…'
                 : phase === 'working'
-                  ? 'Send a hint or approach for the next attempt…'
+                  ? 'Send a hint or attach another screenshot for the next attempt…'
                   : phase === 'idle'
-                    ? 'Paste a problem or screenshot (Ctrl+V), or drag & drop an image…'
-                    : 'Give guidance, specify an algorithm, or paste/drop a new image…'
+                    ? 'Paste problem text or multiple screenshots (Ctrl+V), or drag & drop images…'
+                    : 'Give guidance, or paste/drop additional problem screenshots to combine…'
           }
           onChange={(event) => setDraft(event.target.value)}
           onPaste={handlePaste}
           onKeyDown={(event) => {
             if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
               event.preventDefault();
-              const text = draft.trim();
-              if (!text && !image) return;
-              onSend(text, image);
-              setDraft('');
-              setImage(null);
-              setImageName('');
-              if (fileRef.current) fileRef.current.value = '';
+              sendDraft();
             }
           }}
         />
+        {images.length > 0 || imageNotice ? (
+          <div className="ide-compose-attachments" aria-label="Attached images">
+            {images.map((item, idx) => (
+              <span key={item.id} className="ide-agent-file-pill" title={`Part ${idx + 1}: ${item.name}`}>
+                <img
+                  className="ide-agent-thumb"
+                  src={`data:${item.mime};base64,${item.base64}`}
+                  alt=""
+                />
+                <span className="ide-agent-file">
+                  {idx + 1}. {item.name}
+                </span>
+                <button
+                  type="button"
+                  className="ide-file-clear"
+                  aria-label={`Remove ${item.name}`}
+                  onClick={() => removeImage(item.id)}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            {imageNotice ? <span className="muted ide-agent-file">{imageNotice}</span> : null}
+          </div>
+        ) : null}
         <div className="ide-compose-bar">
           {mode === 'agent' ? (
             <div className="ide-compose-left">
@@ -418,48 +477,35 @@ export function AgentPane({
                 className="sr-only"
                 id="agent-image"
                 type="file"
+                multiple
                 accept="image/jpeg,image/png,image/webp"
-                onChange={(event) => chooseImage(event.target.files?.[0])}
+                onChange={(event) => addFiles(event.target.files, 'part')}
               />
               <label className="btn ghost ide-mini" htmlFor="agent-image">
-                + Image
+                + Images{images.length > 0 ? ` (${images.length}/${MAX_IMAGES})` : ''}
               </label>
-              {imageName ? (
-                <span className="ide-agent-file-pill">
-                  {image ? (
-                    <img
-                      className="ide-agent-thumb"
-                      src={`data:${image.mime};base64,${image.base64}`}
-                      alt=""
-                    />
-                  ) : null}
-                  <span className="ide-agent-file">{imageName}</span>
-                  {image ? (
-                    <button
-                      type="button"
-                      className="ide-file-clear"
-                      aria-label="Remove attached image"
-                      onClick={() => {
-                        setImage(null);
-                        setImageName('');
-                        if (fileRef.current) fileRef.current.value = '';
-                      }}
-                    >
-                      ×
-                    </button>
-                  ) : null}
-                </span>
+              {images.length > 1 ? (
+                <button
+                  type="button"
+                  className="btn ghost ide-mini"
+                  onClick={() => {
+                    setImages([]);
+                    setImageNotice('');
+                  }}
+                >
+                  Clear all
+                </button>
               ) : null}
             </div>
           ) : (
-            <span className="muted ide-compose-shortcut">Ctrl+V image or Ctrl+Enter to send</span>
+            <span className="muted ide-compose-shortcut">Ctrl+V images or Ctrl+Enter to send</span>
           )}
           <button
             type="submit"
             className="btn primary ide-mini"
-            disabled={!configured || (draft.trim().length === 0 && !image) || (working && mode === 'ask')}
+            disabled={!configured || (draft.trim().length === 0 && images.length === 0) || (working && mode === 'ask')}
           >
-            {mode === 'agent' && phase !== 'idle' && !image ? 'Guide' : 'Send'}
+            {mode === 'agent' && phase !== 'idle' && images.length === 0 ? 'Guide' : 'Send'}
           </button>
         </div>
       </form>
