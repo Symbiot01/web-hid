@@ -548,6 +548,68 @@ textarea:focus-visible {
   justify-content: space-between;
 }
 
+.ide-stream-key-overlay {
+  position: absolute;
+  left: 50%;
+  bottom: 48px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  max-width: calc(100% - 24px);
+  padding: 0.38rem 0.55rem;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(11, 14, 20, 0.42);
+  backdrop-filter: blur(10px);
+  transform: translateX(-50%);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.ide-stream:hover .ide-stream-key-overlay {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.ide-stream-key-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  margin: 0;
+  color: var(--text);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.ide-stream-key-toggle input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.ide-stream-keyhud {
+  display: flex;
+  align-items: center;
+  gap: 0.28rem;
+  min-width: 0;
+}
+
+.ide-stream-keychip {
+  min-width: 1.55rem;
+  padding: 0.16rem 0.42rem;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  text-align: center;
+}
+
 .ide-stream-footer {
   position: absolute;
   left: 10px;

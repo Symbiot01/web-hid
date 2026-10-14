@@ -336,6 +336,8 @@ export function EditorPane({
             stream={stream}
             reconnectSeq={reconnectSeq}
             liveMode={liveMode}
+            onLive={onLive}
+            onLeaveLive={onLeaveLive}
             sendFrame={sendFrame}
             onBindVideoGrabber={onBindVideoGrabber}
           />

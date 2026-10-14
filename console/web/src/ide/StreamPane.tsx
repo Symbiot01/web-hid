@@ -13,9 +13,24 @@ type Props = {
   stream: 2 | 3;
   reconnectSeq: number;
   liveMode: LiveMode | null;
+  onLive: (mode: LiveMode) => void;
+  onLeaveLive: () => void;
   sendFrame: (buf: ArrayBuffer | null) => boolean;
   onBindVideoGrabber: (fn: (() => Promise<Blob | null>) | null) => void;
 };
+
+type RecentKey = { id: number; label: string };
+
+function typingHudLabel(event: KeyboardEvent): string | null {
+  if (!isTypingCode(event.code)) return null;
+  if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') return null;
+  if (event.code === 'Space') return 'Space';
+  if (event.code === 'Enter') return 'Enter';
+  if (event.code === 'Backspace') return '⌫';
+  if (event.code === 'Tab') return 'Tab';
+  if (event.key.length === 1) return event.key;
+  return null;
+}
 
 export function StreamPane({
   active,
@@ -23,12 +38,16 @@ export function StreamPane({
   stream,
   reconnectSeq,
   liveMode,
+  onLive,
+  onLeaveLive,
   sendFrame,
   onBindVideoGrabber,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [status, setStatus] = useState<Status>('offline');
   const [detail, setDetail] = useState('No signal');
+  const [recentKeys, setRecentKeys] = useState<RecentKey[]>([]);
+  const keySeq = useRef(0);
   const stageRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef(stream);
   const liveRef = useRef(liveMode);
@@ -180,6 +199,12 @@ export function StreamPane({
       if (!frame) return;
       event.preventDefault();
       sendRef.current(frame);
+      if (phase !== 'down' || mode !== 'typing') return;
+      const label = typingHudLabel(event);
+      if (!label) return;
+      keySeq.current += 1;
+      const id = keySeq.current;
+      setRecentKeys((prev) => [...prev, { id, label }].slice(-6));
     };
     const onDown = (event: KeyboardEvent) => sendKey(event, 'down');
     const onUp = (event: KeyboardEvent) => sendKey(event, 'up');
@@ -215,6 +240,11 @@ export function StreamPane({
     };
   }, [active, liveMode]);
 
+  useEffect(() => {
+    if (active && liveMode === 'typing') return;
+    setRecentKeys([]);
+  }, [active, liveMode]);
+
   function lockPointer() {
     const stage = stageRef.current;
     if (!liveMode || !stage || document.pointerLockElement === stage) return;
@@ -228,6 +258,33 @@ export function StreamPane({
       onClick={lockPointer}
     >
       <video ref={videoRef} autoPlay playsInline muted />
+
+      <div
+        className="ide-stream-key-overlay"
+        onClick={(event) => event.stopPropagation()}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <label className="ide-stream-key-toggle">
+          <input
+            type="checkbox"
+            checked={liveMode === 'typing'}
+            onChange={(event) => {
+              if (event.target.checked) onLive('typing');
+              else onLeaveLive();
+            }}
+          />
+          Live key capture
+        </label>
+        {liveMode === 'typing' && recentKeys.length > 0 ? (
+          <div className="ide-stream-keyhud" aria-live="polite" aria-label="Last typing keys">
+            {recentKeys.map((key) => (
+              <span key={key.id} className="ide-stream-keychip">
+                {key.label}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
 
       <div className="ide-stream-footer" onClick={(event) => event.stopPropagation()}>
         <span className={`ide-stream-status ide-stream-${status}`}>
