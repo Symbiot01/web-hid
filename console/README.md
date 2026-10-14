@@ -41,4 +41,4 @@ Leave `CAPTURE_TOKEN` empty to refuse the capture agent. Leave `HID_URL` empty u
 | `HID_GATE_PASSWORD` | with HID_URL | Min 16. Never sent to the browser |
 | `CAPTURE_TOKEN` | no | Empty refuses the capture agent |
 | `GEMINI_API_KEY` | no | Coding agent. Empty disables it. Never sent to the browser |
-| `GEMINI_MODEL` | no | Defaults to `gemini-3.1-pro-preview` |
+| `GEMINI_MODEL` | no | Defaults to `gemini-4-argon` |

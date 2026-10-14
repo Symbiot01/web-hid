@@ -17,7 +17,7 @@ type Props = {
   messages: AgentMessage[];
   onMode: (mode: AgentMode) => void;
   onSend: (text: string, image: ImagePayload | null) => void;
-  onAction: (action: 'retry' | 'cases_wrong' | 'reset') => void;
+  onAction: (action: 'retry' | 'cases_wrong' | 'more_cases' | 'reset') => void;
 };
 
 function renderInline(line: string): ReactNode[] {
@@ -282,6 +282,9 @@ export function AgentPane({
                 ? 'A sample output contradicts the statement. Edit the case below or send guidance, then retry.'
                 : 'Paused for your input. Edit the code or cases if needed, suggest an approach, or retry.'}
           </p>
+          <button type="button" className="btn ghost ide-mini" disabled={working} onClick={() => onAction('more_cases')}>
+            + Edge cases
+          </button>
           <button type="button" className="btn ghost ide-mini" disabled={working} onClick={() => onAction('retry')}>
             Another approach
           </button>

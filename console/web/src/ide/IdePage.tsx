@@ -428,7 +428,7 @@ export function IdePage({ busy, onLogout }: Props) {
     }
   }
 
-  function guide(action: 'retry' | 'cases_wrong' | 'reset') {
+  function guide(action: 'retry' | 'cases_wrong' | 'more_cases' | 'reset') {
     if (action === 'reset') {
       agentOutput.current = '';
       void fetch('/api/agent/guide', {

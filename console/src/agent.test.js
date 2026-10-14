@@ -2,7 +2,16 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { cleanSource, createAgentControl, entryFunction, imageOk, parseModelJson, sourceHasEntry } = require('./agent');
+const {
+  MODEL,
+  cleanSource,
+  createAgentControl,
+  entryFunction,
+  imageOk,
+  parseModelJson,
+  sourceHasEntry,
+  wantsMoreCases,
+} = require('./agent');
 const { createApp } = require('./http');
 const { createSessionToken, COOKIE_NAME } = require('./auth');
 
@@ -49,6 +58,10 @@ test('parses model JSON and checks image bytes', () => {
     '#include <iostream>\nint main() { while (getline(cin, line)) { while (low <= high) { low++; } } return 0; }';
   const expanded = cleanSource(squished);
   assert.ok(expanded.split('\n').length >= 6);
+  assert.equal(MODEL, 'gemini-4-argon');
+  assert.equal(wantsMoreCases('add few more test cases from your side to do even more thorough testing'), true);
+  assert.equal(wantsMoreCases('', 'more_cases'), true);
+  assert.equal(wantsMoreCases('use dynamic programming instead'), false);
 });
 
 test('solved run writes the source and does not reveal the key', async () => {
@@ -243,6 +256,79 @@ test('builds the main test wrapper first when harness is supported', async () =>
   assert.equal(view.phase, 'solved');
   assert.equal(view.entry, 'findMedianSortedArrays');
   assert.equal(view.title, 'Median of Two Sorted Arrays');
+});
+
+test('adds edge test cases on user request and re-runs the test suite', async () => {
+  const { agent, calls } = harness(
+    {
+      identify: [
+        {
+          title: 'Median of Two Sorted Arrays',
+          statement: 'Return the median of two sorted arrays.',
+          casesFromProblem: true,
+          cases: [
+            { input: 'nums1 = [1,3], nums2 = [2]\n', expected: '2.00000\n' },
+            { input: 'nums1 = [1,2], nums2 = [3,4]\n', expected: '2.50000\n' },
+          ],
+          plan: 'Binary search partition.',
+          functionName: 'findMedianSortedArrays',
+          signature: 'double findMedianSortedArrays(vector<int>& nums1, vector<int>& nums2)',
+          format: 'nums1 = [...], nums2 = [...] -> 5 decimal places',
+        },
+      ],
+      review: [{ ok: true, reason: '' }],
+      solve: [
+        {
+          source:
+            'double findMedianSortedArrays(int a){return 2.0;}\nint main(){return (int)findMedianSortedArrays(1);}\n',
+          approach: 'Binary search partition.',
+        },
+      ],
+      makeCases: [
+        {
+          cases: [
+            { input: 'nums1 = [], nums2 = [1]\n', expected: '1.00000\n' },
+            { input: 'nums1 = [-5,-3], nums2 = [-2,0]\n', expected: '-2.50000\n' },
+            { input: 'nums1 = [1,1,1], nums2 = [1,1,1]\n', expected: '1.00000\n' },
+          ],
+        },
+      ],
+      retry: [],
+      fix: [],
+      ask: [],
+    },
+    [
+      {
+        status: 'ran',
+        compile: { ok: true, stderr: '' },
+        cases: [
+          { status: 'pass', actual: '2.00000\n', reason: null, timeMs: 6 },
+          { status: 'pass', actual: '2.50000\n', reason: null, timeMs: 6 },
+        ],
+      },
+      {
+        status: 'ran',
+        compile: { ok: true, stderr: '' },
+        cases: [
+          { status: 'pass', actual: '2.00000\n', reason: null, timeMs: 5 },
+          { status: 'pass', actual: '2.50000\n', reason: null, timeMs: 5 },
+          { status: 'pass', actual: '1.00000\n', reason: null, timeMs: 5 },
+          { status: 'pass', actual: '-2.50000\n', reason: null, timeMs: 5 },
+          { status: 'pass', actual: '1.00000\n', reason: null, timeMs: 5 },
+        ],
+      },
+    ],
+  );
+  const first = await agent.begin({ text: 'median' });
+  assert.equal(first.cases.length, 2);
+  const expanded = await agent.guide({
+    text: 'add few more test cases from your side to do even more thorough testing',
+    cases: first.cases,
+  });
+  assert.ok(calls.includes('makeCases'));
+  assert.equal(expanded.phase, 'solved');
+  assert.equal(expanded.cases.length, 5);
+  assert.equal(expanded.cases.every((c) => c.status === 'pass'), true);
 });
 
 test('ask does not return source', async () => {

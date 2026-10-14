@@ -1,9 +1,9 @@
 'use strict';
 
-const MODEL = 'gemini-3.1-pro-preview';
+const MODEL = 'gemini-4-argon';
 const MAX_APPROACHES = 3;
 const MAX_COMPILE_FIXES = 3;
-const CASE_LIMIT = 8;
+const CASE_LIMIT = 12;
 const TEXT_LIMIT = 8_000;
 const SOURCE_LIMIT = 64 * 1024;
 const IMAGE_MAX = 4 * 1024 * 1024;
@@ -50,6 +50,19 @@ function entryFunction(name) {
   const member = trimmed.includes('::') ? trimmed.split('::').pop().trim() : trimmed;
   if (!/^[A-Za-z_][A-Za-z0-9_]{0,64}$/.test(member) || RESERVED_ENTRY.has(member)) return 'solve';
   return member;
+}
+
+function wantsMoreCases(text, action) {
+  if (action === 'more_cases') return true;
+  if (typeof text !== 'string' || !text.trim()) return false;
+  return (
+    /\b(add|more|extra|additional|new|generate|create|thorough|edge)\b[\s\S]{0,60}\b(test\s*cases?|cases?|tests?|edge\s*cases?)\b/i.test(
+      text,
+    ) ||
+    /\b(test\s*cases?|cases?|edge\s*cases?)\b[\s\S]{0,40}\b(from\s+your\s+side|more|thorough|extra|additional)\b/i.test(
+      text,
+    )
+  );
 }
 
 function stripCommentsAndStrings(code) {
@@ -429,15 +442,15 @@ function promptFor(task, context) {
   if (task === 'identify') {
     return {
       system: [
-        'You extract programming problems from text or screenshots.',
+        'You extract programming problems from text or screenshots across any platform (LeetCode, Codeforces, AtCoder, CSES, ICPC, HackerRank, or custom specifications).',
         'Reply with JSON only: {"title":"","statement":"","casesFromProblem":false,"cases":[{"input":"","expected":""}],"plan":"","functionName":"","signature":"","format":""}.',
-        '- title: short problem title (for example, "Median of Two Sorted Arrays").',
-        '- statement: clean, readable problem statement with constraints.',
-        '- casesFromProblem / cases: copy sample inputs and outputs verbatim ONLY when visible in the problem. If none are visible, casesFromProblem is false and cases is []. Never invent expected outputs here.',
-        '- functionName: exact function name to implement if the problem gives a class/function template (e.g. "findMedianSortedArrays"), or "" if it is a standard stdin/stdout problem (in which case the solution function will be named "solve").',
-        '- signature: full C++17 signature for that function (e.g. "double findMedianSortedArrays(vector<int>& nums1, vector<int>& nums2)" or "void solve(istream& in, ostream& out)").',
-        '- format: exact specification of how each case input is formatted (e.g. labeled arrays `nums1 = [1,3], nums2 = [2]` vs raw numbers) and how expected output is formatted (e.g. fixed 5 decimals `2.00000`, `[a,b]`, `true`/`false`).',
-        '- plan: 1-2 sentences describing the optimal algorithm and its time/space complexity.',
+        '- title: short problem title (e.g. "Median of Two Sorted Arrays", "Shortest Routes I").',
+        '- statement: complete, clean problem statement including input/output rules, constraints, and edge conditions.',
+        '- casesFromProblem / cases: copy sample inputs and outputs verbatim ONLY when shown in the problem. If none are shown, set casesFromProblem to false and cases to []. Never guess or invent sample outputs here.',
+        '- functionName: exact method/function name if the problem specifies a class/function signature (e.g. "findMedianSortedArrays", "threeSum", "mergeKLists"). If the problem is a multi-method design class (like LRUCache) or standard stdin/stdout competitive programming, set functionName to "solve".',
+        '- signature: full C++17 signature for that function (e.g. "double findMedianSortedArrays(vector<int>& nums1, vector<int>& nums2)", "ListNode* reverseKGroup(ListNode* head, int k)", or "void solve(istream& in, ostream& out)").',
+        '- format: precise description of the exact case input syntax (e.g. labeled assignments `nums1 = [1,3], nums2 = [2]`, 2D brackets `grid = [[1,0],[0,1]]`, level-order tree `[1,null,2,3]`, or raw whitespace-separated numbers) and exact expected output syntax (e.g. fixed 5 decimals `2.00000`, `[a,b]`, `true`/`false`, `YES`/`NO`, or space/newline-separated values).',
+        '- plan: 1-2 sentences stating the optimal algorithm and its time and space complexity.',
       ].join('\n'),
       user: `Problem text:\n${clip(context.text, 12_000)}\n\nCurrent editor file:\n${source}`,
     };
@@ -450,10 +463,19 @@ function promptFor(task, context) {
     };
   }
   if (task === 'makeCases') {
+    const hasExisting = Array.isArray(context.cases) && context.cases.length > 0;
     return {
-      system:
-        'Write 3 stdin/stdout test cases for this problem, including a small normal case and an edge case. Reply with JSON only: {"cases":[{"input":"","expected":""}]}. Every expected output must be hand-verified and follow the exact input/output format.',
-      user: `Statement:\n${statement}\n\nFormat:\n${format}`,
+      system: [
+        hasExisting
+          ? 'Generate 3 to 4 NEW, thorough edge and stress test cases that are NOT duplicates of Existing cases.'
+          : 'Generate 4 thorough stdin/stdout test cases for this problem, covering a basic case, boundary/minimal case, tricky edge case, and stress pattern.',
+        'Reply with JSON only: {"cases":[{"input":"","expected":""}]}.',
+        'Mandatory test-case rules:',
+        '1. Every `input` and `expected` string MUST strictly follow the exact syntax, variable labels, bracket style, and decimal precision shown in Format and Existing cases (for example, if Existing cases use `nums1 = [1,3], nums2 = [2]` and `2.00000`, every new case MUST also use `nums1 = [...], nums2 = [...]` and 5 decimal places).',
+        '2. Cover diverse edge conditions: empty/single-element inputs, negative numbers, zeros, duplicates, odd vs even lengths, already-sorted vs reverse-sorted, and boundary values allowed by the statement.',
+        '3. Trace the problem rules carefully by hand for each new input so every `expected` output is 100% mathematically correct.',
+      ].join('\n'),
+      user: `Statement:\n${statement}\n\nFormat:\n${format}\n\nExisting cases:\n${cases}\n\nFocus / user request:\n${hint || 'Add thorough edge, boundary, and corner cases.'}`,
     };
   }
   if (task === 'harness') {
@@ -461,14 +483,16 @@ function promptFor(task, context) {
       system: [
         'Write ONLY the C++17 test harness (`int main()`) and a compilable stub for the solution function.',
         'Reply with JSON only: {"source":""}.',
-        `Structure the file in two clear sections:`,
-        `1. Top section: standard headers, \`using namespace std;\`, and the function \`${signature}\` with a placeholder return so it compiles. Do NOT put the problem algorithm in \`main\`.`,
+        'Structure the file in two clear sections:',
+        `1. Top section: standard headers (\`<iostream>\`, \`<vector>\`, \`<string>\`, \`<sstream>\`, \`<algorithm>\`, \`<iomanip>\`, etc.), \`using namespace std;\`, any required data structures (\`ListNode\`, \`TreeNode\` if used in \`${signature}\`), and the function \`${signature}\` with a minimal placeholder return so it compiles. Do NOT put the problem algorithm in \`main\`.`,
         `2. Bottom section: \`int main()\` test wrapper that reads one test case from stdin matching the exact format of Cases, calls \`${entry}\`, and prints the result to stdout matching the exact format of Cases.`,
-        'Critical input/output harness rules:',
-        '- Inspect the `input` strings in Cases carefully.',
-        '- If `input` contains variable labels like `nums1 = [1,3], nums2 = [2]` or `s = "abc", k = 2`: NEVER parse digits from variable names (`nums1` has `1`, `nums2` has `2`!). Skip past `=` or extract each `[...]` bracketed segment / `"..."` quoted string in order. Handle empty arrays `[]` and negative numbers properly.',
-        '- If `input` is plain whitespace-separated competitive programming input, read from `cin` and pass to `solve`.',
-        '- Match `expected` output formatting exactly: if `expected` has fixed decimals like `2.00000`, use `cout << fixed << setprecision(5)`; if `true`/`false`, print `true`/`false`; if `[1,2]`, match brackets and spacing.',
+        'General input/output harness rules:',
+        '- Inspect the `input` and `expected` strings in Cases carefully.',
+        '- Labeled LeetCode-style inputs (`nums1 = [1,3], nums2 = [2]`, `s = "abc", k = 2`, `grid = [[1,2],[3,4]]`): NEVER parse digits from variable names (`nums1` contains `1`, `nums2` contains `2`, `s1`/`s2`, `word1`/`word2`, `list1`/`list2`!). Always advance past `=` before parsing each argument, or extract each `[...]` / `[[...]]` / `"..."` / number after `=` in order. Handle empty arrays `[]`, negative integers, and multi-line inputs cleanly.',
+        '- Linked lists (`ListNode*`) and binary trees (`TreeNode*`): if used in the signature, include small helpers to build `ListNode*` from `[1,2,3]` or `TreeNode*` from level-order `[1,null,2,3]` and print the returned structure in the exact expected format.',
+        '- In-place `void` functions: if the target function returns `void` and mutates a vector/string by reference, print the mutated argument in the expected format after calling the function.',
+        '- Standard competitive programming inputs (unlabeled whitespace-separated numbers/strings): read cleanly from `cin` (including `t` testcases if the input starts with a testcase count) and pass to `solve`.',
+        '- Match `expected` output formatting exactly: if `expected` has fixed decimals like `2.00000`, use `cout << fixed << setprecision(5)`; if `true`/`false` or `YES`/`NO`, match case; if `[1,2]`, match brackets and commas.',
         '- Format the C++ code across multiple lines with clean 2-space indentation.',
       ].join('\n'),
       user: `Statement:\n${statement}\n\nTarget function:\n${entry}\n\nSignature:\n${signature}\n\nSample format:\n${format}\n\nCases:\n${cases}`,
@@ -477,18 +501,19 @@ function promptFor(task, context) {
   if (task === 'solve' || task === 'retry') {
     return {
       system: [
-        'Write one complete, clean C++17 program.',
+        'Write one complete, production-quality C++17 solution program.',
         'Reply with JSON only: {"source":"","approach":""}.',
-        'Architecture rules (mandatory):',
-        `1. Put the entire algorithm inside the function \`${entry}\` (signature: \`${signature}\`) at the top of the file.`,
-        `2. NEVER write the algorithm inside \`main()\`. \`main()\` at the bottom of the file is strictly the test wrapper that parses stdin for the test case, calls \`${entry}\`, and formats stdout to match the expected output.`,
-        '3. If a harness is already provided in Previous source, keep its `main()` I/O wrapper intact unless Previous result shows an input-parsing or output-formatting mismatch.',
-        '4. Beware of labeled inputs like `nums1 = [1,3], nums2 = [2]`: never accidentally parse the `1` or `2` in the variable names `nums1`/`nums2` as array elements; parse only values after `=` or inside `[...]`.',
-        '5. Match the exact expected output format (such as `fixed << setprecision(5)` for `2.00000`).',
-        '6. Format C++ code cleanly across multiple lines with 2-space indentation. Never cram multiple loops or statements onto a single line.',
-        '7. Do not open files, spawn processes, or use the network. `approach` is 1-2 clear sentences stating the algorithm and complexity.',
+        'Architecture & correctness rules (mandatory):',
+        `1. Put the entire problem-solving algorithm inside \`${entry}\` (signature: \`${signature}\`) at the top of the file.`,
+        `2. NEVER write the problem algorithm inside \`main()\`. \`main()\` at the bottom of the file is strictly the test wrapper that parses stdin for the test case, calls \`${entry}\`, and formats stdout to match the expected output.`,
+        '3. If a harness is already provided in Previous source, keep its `main()` I/O wrapper intact unless Previous result shows an input-parsing or output-formatting bug.',
+        '4. Beware of labeled inputs like `nums1 = [1,3], nums2 = [2]` or `s1 = "ab", s2 = "ba"`: never parse the `1` or `2` in variable names as input numbers; parse only values after `=` or inside `[...]` / `"..."`. Handle empty arrays `[]`, negative values, 2D arrays `[[...]]`, and `null` tree nodes properly.',
+        '5. Handle general algorithmic edge cases: empty/single-element containers, 64-bit integer overflow (use `long long` for sums/products/distances), modulo arithmetic, disconnected graphs, duplicate elements, and boundary indices.',
+        '6. Match the exact expected output format (such as `fixed << setprecision(5)` for `2.00000`, bracketed lists `[a,b]`, or `true`/`false`).',
+        '7. Format C++ code cleanly across multiple lines with 2-space indentation. Never cram multiple loops or statements onto a single line.',
+        '8. Do not open files, spawn processes, or use the network. `approach` is 1-2 clear sentences stating the algorithm and its time/space complexity.',
       ].join('\n'),
-      user: `Statement:\n${statement}\n\nFunction:\n${entry}\n\nSignature:\n${signature}\n\nSample format:\n${format}\n\nCases:\n${cases}\n\nApproach note:\n${hint || 'Choose an optimal, correct approach.'}\n\nPrevious source:\n${source}\n\nPrevious result:\n${failure}`,
+      user: `Statement:\n${statement}\n\nFunction:\n${entry}\n\nSignature:\n${signature}\n\nSample format:\n${format}\n\nCases:\n${cases}\n\nApproach note:\n${hint || 'Choose an optimal, general approach that handles all constraints and edge cases.'}\n\nPrevious source:\n${source}\n\nPrevious result:\n${failure}`,
     };
   }
   if (task === 'fix') {
@@ -533,7 +558,7 @@ function createGemini({ apiKey, model, fetchImpl }) {
               systemInstruction: { parts: [{ text: built.system }] },
               contents: [{ role: 'user', parts }],
               generationConfig: {
-                temperature: task === 'solve' || task === 'retry' ? 0.3 : 0.1,
+                temperature: task === 'solve' || task === 'retry' ? 0.25 : 0.1,
                 maxOutputTokens: 16384,
                 responseMimeType: 'application/json',
                 responseSchema: schemaFor(task),
@@ -697,6 +722,102 @@ function createAgentControl({ apiKey, model, generate, run }) {
     }
   }
 
+  async function executeCurrentCases() {
+    state.step = 'test';
+    let result;
+    try {
+      result = await run(state.source, state.cases);
+    } catch (err) {
+      state.phase = 'needs_human';
+      const reason = err && err.code === 'BUSY' ? 'Another run is in progress.' : 'The runner could not start.';
+      say(`${reason} The program is in the editor.`);
+      return { ok: false, fatal: true };
+    }
+    if (!result || !result.status) {
+      state.phase = 'needs_human';
+      say('The runner could not start. The program is in the editor.');
+      return { ok: false, fatal: true };
+    }
+    const ran = result.cases || [];
+    state.cases = state.cases.map((item, index) => ({
+      input: item.input,
+      expected: item.expected,
+      actual: ran[index] ? ran[index].actual : '',
+      stderr: ran[index] && ran[index].stderr ? ran[index].stderr : '',
+      reason: ran[index] && ran[index].reason ? ran[index].reason : null,
+      timeMs: ran[index] && typeof ran[index].timeMs === 'number' ? ran[index].timeMs : 0,
+      status: result.status === 'compile_error' ? 'idle' : ran[index] ? ran[index].status : 'idle',
+    }));
+    const report = formatRun({
+      ...result,
+      cases: state.cases.map((item, index) => ({ ...item, ...(ran[index] || {}) })),
+    });
+    noteOutput(report);
+    state.failure = report;
+    const passedCount = state.cases.filter((item) => item.status === 'pass').length;
+    return {
+      ok: result.status !== 'compile_error' && passedCount === state.cases.length,
+      fatal: false,
+      result,
+      passedCount,
+    };
+  }
+
+  async function addCasesAndTest(userHint) {
+    state.step = 'cases';
+    say('Generating additional edge and boundary test cases for this problem.');
+    const made = await talk('makeCases', {
+      statement: state.statement,
+      format: state.format,
+      cases: state.cases,
+      hint: userHint,
+    });
+    if (!validCases(made && made.cases)) refuse(502, 'The model reply was not usable');
+    const seen = new Set(state.cases.map((item) => item.input.trim()));
+    const fresh = [];
+    for (const item of made.cases) {
+      const key = item.input.trim();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      fresh.push({
+        input: item.input,
+        expected: item.expected,
+        actual: '',
+        stderr: '',
+        reason: null,
+        timeMs: 0,
+        status: 'idle',
+      });
+    }
+    const room = Math.max(0, CASE_LIMIT - state.cases.length);
+    const added = fresh.slice(0, room);
+    if (added.length === 0) {
+      say(`Already at ${state.cases.length} test cases or no distinct new cases were produced. Re-running the suite.`);
+    } else {
+      state.cases = [...state.cases, ...added];
+      say(`Added ${added.length} new edge test case${added.length === 1 ? '' : 's'} (${state.cases.length} total). Running the test suite.`);
+    }
+
+    if (state.source && validSource(state.source, secret)) {
+      const check = await executeCurrentCases();
+      if (check.fatal) return;
+      if (check.ok) {
+        state.phase = 'solved';
+        state.step = 'done';
+        say(`All ${state.cases.length} test cases passed.`);
+        return;
+      }
+      say(
+        `${check.passedCount}/${state.cases.length} passed on the expanded test suite. Updating ${state.entry}() to handle the failing case.`,
+      );
+      state.hint = userHint || 'Fix the solution or input parser so all existing and newly added edge cases pass.';
+      await writeAndRun('retry');
+      return;
+    }
+
+    await writeAndRun('solve');
+  }
+
   async function writeAndRun(task) {
     if (task === 'solve' && !state.source) {
       await buildHarnessIfSupported();
@@ -739,43 +860,17 @@ function createAgentControl({ apiKey, model, generate, run }) {
         }
         state.source = shapedClean;
       }
-      state.approach = clip(written.approach, 1_000);
-      if (state.approach) say(state.approach, 'plan');
+      const nextApproach = clip(written.approach, 1_000);
+      if (nextApproach && (attempt > 1 || !state.messages.some((m) => m.kind === 'plan'))) {
+        state.approach = nextApproach;
+        say(state.approach, 'plan');
+      }
       say(`Wrote ${state.entry}() and the main() test wrapper into the editor (attempt ${attempt}/${MAX_APPROACHES}).`);
 
-      state.step = 'test';
       while (fixes < MAX_COMPILE_FIXES) {
-        let result;
-        try {
-          result = await run(state.source, state.cases);
-        } catch (err) {
-          state.phase = 'needs_human';
-          const reason = err && err.code === 'BUSY' ? 'Another run is in progress.' : 'The runner could not start.';
-          say(`${reason} The program is in the editor.`);
-          return;
-        }
-        if (!result || !result.status) {
-          state.phase = 'needs_human';
-          say('The runner could not start. The program is in the editor.');
-          return;
-        }
-        const ran = result.cases || [];
-        state.cases = state.cases.map((item, index) => ({
-          input: item.input,
-          expected: item.expected,
-          actual: ran[index] ? ran[index].actual : '',
-          stderr: ran[index] && ran[index].stderr ? ran[index].stderr : '',
-          reason: ran[index] && ran[index].reason ? ran[index].reason : null,
-          timeMs: ran[index] && typeof ran[index].timeMs === 'number' ? ran[index].timeMs : 0,
-          status: result.status === 'compile_error' ? 'idle' : ran[index] ? ran[index].status : 'idle',
-        }));
-        const reported = result.cases || [];
-        const report = formatRun({
-          ...result,
-          cases: state.cases.map((item, index) => ({ ...item, ...(reported[index] || {}) })),
-        });
-        noteOutput(report);
-        state.failure = report;
+        const check = await executeCurrentCases();
+        if (check.fatal) return;
+        const { result, passedCount } = check;
         if (result.status === 'compile_error') {
           fixes += 1;
           say(`Compile failed. Repairing syntax (${fixes}/${MAX_COMPILE_FIXES}).`);
@@ -789,16 +884,10 @@ function createAgentControl({ apiKey, model, generate, run }) {
           });
           const fixedClean = cleanSource(fixed && fixed.source);
           if (!validSource(fixedClean, secret)) refuse(502, 'The model reply was not usable');
-          if (sourceHasEntry(fixedClean, state.entry)) {
-            state.source = fixedClean;
-          } else {
-            state.source = fixedClean;
-          }
+          state.source = fixedClean;
           continue;
         }
-        const passedCount = state.cases.filter((item) => item.status === 'pass').length;
-        const failed = passedCount !== state.cases.length;
-        if (!failed) {
+        if (check.ok) {
           state.phase = 'solved';
           state.step = 'done';
           say(`All ${state.cases.length} test case${state.cases.length === 1 ? '' : 's'} passed.`);
@@ -886,6 +975,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
     state.casesVerified = false;
     state.cases = [];
     state.source = '';
+    state.approach = '';
     state.failure = '';
     state.output = '';
     state.hint = clip(input.hint, 4_000);
@@ -933,7 +1023,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
         state.casesVerified = true;
       } else {
         say('No sample cases in the problem. Generating test cases from the statement.');
-        const made = await talk('makeCases', { statement: state.statement, format: state.format });
+        const made = await talk('makeCases', { statement: state.statement, format: state.format, cases: [] });
         if (!validCases(made.cases)) refuse(502, 'The model reply was not usable');
         state.cases = made.cases.slice(0, 4).map((item) => ({
           input: item.input,
@@ -946,7 +1036,10 @@ function createAgentControl({ apiKey, model, generate, run }) {
         }));
         say(`Created ${state.cases.length} test case${state.cases.length === 1 ? '' : 's'}.`);
       }
-      if (found.plan) say(clip(found.plan, 1_000), 'plan');
+      if (found.plan) {
+        state.approach = clip(found.plan, 1_000);
+        say(state.approach, 'plan');
+      }
       await writeAndRun('solve');
       return snapshot();
     } catch (error) {
@@ -967,13 +1060,20 @@ function createAgentControl({ apiKey, model, generate, run }) {
     }
     const text = clip(input && input.text, 4_000);
     if (state.running) {
-      if (!text && action !== 'retry' && action !== 'cases_wrong') refuse(400, 'Send an approach or some context');
+      if (!text && action !== 'retry' && action !== 'cases_wrong' && action !== 'more_cases') {
+        refuse(400, 'Send an approach or some context');
+      }
       if (action === 'cases_wrong') {
         state.stopForCases = true;
         say('I will pause after this run if any test case fails.');
         return snapshot();
       }
-      state.pendingHint = action === 'retry' ? 'Try a different approach.' : text;
+      state.pendingHint =
+        action === 'retry'
+          ? 'Try a different approach.'
+          : action === 'more_cases'
+            ? 'Add more edge test cases.'
+            : text;
       say('Queued your guidance for the next attempt.');
       return snapshot();
     }
@@ -987,15 +1087,37 @@ function createAgentControl({ apiKey, model, generate, run }) {
       state.source = cleanSource(input.source);
     }
     if (input && Array.isArray(input.cases) && validCases(input.cases)) {
-      state.cases = input.cases.map((item) => ({
-        input: item.input,
-        expected: item.expected,
-        actual: '',
-        stderr: '',
-        reason: null,
-        timeMs: 0,
-        status: 'idle',
-      }));
+      state.cases = input.cases.map((item, idx) => {
+        const prev = state.cases[idx];
+        const unchanged = prev && prev.input === item.input && prev.expected === item.expected;
+        return {
+          input: item.input,
+          expected: item.expected,
+          actual: unchanged ? prev.actual || '' : '',
+          stderr: unchanged ? prev.stderr || '' : '',
+          reason: unchanged ? prev.reason || null : null,
+          timeMs: unchanged && typeof prev.timeMs === 'number' ? prev.timeMs : 0,
+          status: unchanged ? prev.status || 'idle' : 'idle',
+        };
+      });
+    }
+    if (wantsMoreCases(text, action)) {
+      const userMsg = text || 'Add more edge test cases for thorough testing.';
+      state.running = true;
+      state.phase = 'working';
+      state.messages.push({ role: 'user', text: redact(userMsg, secret), kind: 'user' });
+      try {
+        await addCasesAndTest(userMsg);
+        if (state.phase === 'working') state.phase = 'needs_human';
+        return snapshot();
+      } catch (error) {
+        state.phase = 'needs_human';
+        say(error.status ? error.message : 'The agent stopped');
+        if (error.status && error.status < 500) throw error;
+        return snapshot();
+      } finally {
+        state.running = false;
+      }
     }
     const hint = action === 'retry' ? 'Try a different approach than the one already written.' : text;
     if (!hint) refuse(400, 'Send an approach or some context');
@@ -1038,5 +1160,6 @@ module.exports = {
   entryFunction,
   sourceHasEntry,
   cleanSource,
+  wantsMoreCases,
   MODEL,
 };

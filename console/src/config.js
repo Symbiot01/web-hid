@@ -98,7 +98,7 @@ function loadConfig() {
     console.error('[fatal] GEMINI_API_KEY is invalid');
     process.exit(1);
   }
-  const geminiModel = (process.env.GEMINI_MODEL || 'gemini-3.1-pro-preview').trim();
+  const geminiModel = (process.env.GEMINI_MODEL || 'gemini-4-argon').trim();
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/.test(geminiModel)) {
     console.error('[fatal] GEMINI_MODEL is invalid');
     process.exit(1);
