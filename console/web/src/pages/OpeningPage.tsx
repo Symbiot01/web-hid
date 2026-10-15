@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useEffect, useState, type FormEvent } from 'react';
 
 export function OpeningPage() {
@@ -112,6 +112,12 @@ export function OpeningPage() {
           </button>
         </form>
       </section>
+      <p className="muted" style={{ marginTop: '0.9rem', textAlign: 'center', fontSize: '0.84rem' }}>
+        New here?{' '}
+        <Link to="/tutorial" style={{ color: 'var(--accent-hover)', textDecoration: 'none', fontWeight: 500 }}>
+          Tutorial &amp; Setup Guide
+        </Link>
+      </p>
     </main>
   );
 }

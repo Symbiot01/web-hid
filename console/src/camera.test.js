@@ -227,6 +227,9 @@ test('browser camera routes never receive the device password', async () => {
   const cookie = `${COOKIE_NAME}=${encodeURIComponent(createSessionToken(sessionSecret))}`;
   const bridge = { Authorization: `Bearer ${bridgeToken}` };
   try {
+    const tut = await fetch(`${base}/tutorial`);
+    assert.equal(tut.status, 200);
+    assert.equal(tut.headers.get('content-type')?.includes('text/html'), true);
     assert.equal((await fetch(`${base}/api/camera`)).status, 401);
     assert.equal((await fetch(`${base}/api/bridge/poll`)).status, 401);
     assert.equal((await fetch(`${base}/api/camera/command`, { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: '{"name":"reboot"}' })).status, 400);

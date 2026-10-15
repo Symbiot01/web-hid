@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { AgentPane } from './AgentPane.tsx';
 import { EditorPane } from './EditorPane.tsx';
 import type { HidPlay } from './hidPayload.ts';
@@ -614,14 +615,25 @@ export function IdePage({ busy, onLogout }: Props) {
                   </button>
                 </>
               ) : (
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="ide-menu-item"
-                  onClick={() => setConfirmLogout(true)}
-                >
-                  Logout
-                </button>
+                <>
+                  <Link
+                    to="/tutorial"
+                    role="menuitem"
+                    className="ide-menu-item"
+                    style={{ textDecoration: 'none' }}
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    Tutorial &amp; Guide
+                  </Link>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="ide-menu-item"
+                    onClick={() => setConfirmLogout(true)}
+                  >
+                    Logout
+                  </button>
+                </>
               )}
             </div>
           ) : null}

@@ -596,7 +596,7 @@ function createApp(opts) {
       fallthrough: true,
     }),
   );
-  app.get(['/', '/app'], (_req, res) => {
+  app.get(['/', '/app', '/tutorial'], (_req, res) => {
     if (!fs.existsSync(indexHtml)) return res.status(404).json({ error: 'Not found' });
     return res.sendFile(indexHtml);
   });
