@@ -268,6 +268,7 @@ function createCameraControl(options = {}) {
 
   function drain() {
     touch();
+    const media = streamStatus();
     /** @type {Record<string, unknown>[]} */
     const commands = [];
     if (!configured) {
@@ -278,7 +279,7 @@ function createCameraControl(options = {}) {
       const next = queue.shift();
       if (next) commands.push(next);
     }
-    return { video: videoDesired, stream, commands };
+    return { video: videoDesired, ingest: Boolean(media && media.ingest), stream, commands };
   }
 
   /**
@@ -287,8 +288,12 @@ function createCameraControl(options = {}) {
    */
   function hold(res, waitMs) {
     if (poller) {
-      res.status(409).json({ error: 'A bridge is already connected' });
-      return;
+      const previous = poller;
+      poller = null;
+      cancel(previous.timer);
+      if (!previous.res.writableEnded && !previous.res.destroyed) {
+        previous.res.json(drain());
+      }
     }
     touch();
     if (!configured || queue.length > 0) {

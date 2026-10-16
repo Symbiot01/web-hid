@@ -166,14 +166,20 @@ class H264Upload:
                 pass
 
     def ensure(self) -> None:
+        self.stop.clear()
         if self.thread and self.thread.is_alive():
             return
-        self.stop.clear()
         self.thread = threading.Thread(target=self._run, name="h264", daemon=True)
         self.thread.start()
 
     def halt(self) -> None:
         self.stop.set()
+        try:
+            self.box.put_nowait(None)
+        except queue.Full:
+            pass
+
+    def recycle(self) -> None:
         try:
             self.box.put_nowait(None)
         except queue.Full:
@@ -193,7 +199,8 @@ class H264Upload:
         host = parsed.hostname or "127.0.0.1"
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
         path = (parsed.path or "").rstrip("/") + "/api/bridge/h264"
-        conn = HTTPSConnection(host, port, timeout=20) if parsed.scheme == "https" else HTTPConnection(host, port, timeout=20)
+        conn = HTTPSConnection(host, port, timeout=15) if parsed.scheme == "https" else HTTPConnection(host, port, timeout=15)
+        idle_polls = 0
         try:
             conn.putrequest("POST", path)
             conn.putheader("Authorization", "Bearer " + self.token)
@@ -204,9 +211,13 @@ class H264Upload:
                 try:
                     item = self.box.get(timeout=0.5)
                 except queue.Empty:
+                    idle_polls += 1
+                    if idle_polls >= 16:
+                        break
                     continue
                 if item is None:
                     break
+                idle_polls = 0
                 conn.send(b"%X\r\n%s\r\n" % (len(item), item))
             conn.send(b"0\r\n\r\n")
             resp = conn.getresponse()
@@ -216,9 +227,9 @@ class H264Upload:
             if resp.status == 401:
                 log("bridge token was rejected")
                 self.stop.set()
-            elif resp.status == 409:
-                self.error = "ingest busy"
-                time.sleep(2)
+            elif resp.status in (409, 429):
+                self.error = "rate limited" if resp.status == 429 else "ingest busy"
+                time.sleep(4 if resp.status == 429 else 2)
         finally:
             conn.close()
             self.connected = False
@@ -800,10 +811,15 @@ class Bridge:
                 time.sleep(1)
                 continue
             commands = payload.get("commands")
+            server_ingest = payload.get("ingest", True) is not False
             with self.lock:
                 self.video_desired = payload.get("video") is True
+                desired_now = self.video_desired
                 if payload.get("stream") in (2, 3):
                     self.stream = payload["stream"]
+            now = time.monotonic()
+            if desired_now and self.video_open and self.last_video > 0 and (now - self.last_video) < 3.0 and not server_ingest:
+                self.pump.recycle()
             if not isinstance(commands, list):
                 continue
             for command in commands:

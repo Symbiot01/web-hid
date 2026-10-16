@@ -202,6 +202,43 @@ test('stop stream requires a session and blocks the next watch', async () => {
   }
 });
 
+test('drain reports server ingest state and overlapping poll replaces stale poller', async () => {
+  let ingestActive = false;
+  const camera = createCameraControl({
+    password: 'device-secret',
+    streamStatus: () => ({ ingest: ingestActive }),
+    manual: true,
+  });
+  assert.equal(camera.drain().ingest, false);
+  ingestActive = true;
+  assert.equal(camera.drain().ingest, true);
+
+  let firstEnded = false;
+  let secondEnded = false;
+  const res1 = {
+    writableEnded: false,
+    destroyed: false,
+    on() {},
+    json() {
+      this.writableEnded = true;
+      firstEnded = true;
+    },
+  };
+  const res2 = {
+    writableEnded: false,
+    destroyed: false,
+    on() {},
+    json() {
+      this.writableEnded = true;
+      secondEnded = true;
+    },
+  };
+  camera.hold(/** @type {any} */ (res1), 8000);
+  camera.hold(/** @type {any} */ (res2), 8000);
+  assert.equal(firstEnded, true);
+  assert.equal(secondEnded, false);
+});
+
 test('browser camera routes never receive the device password', async () => {
   const { createApp } = require('./http');
   const { createSessionToken, COOKIE_NAME } = require('./auth');

@@ -113,6 +113,7 @@ class LookCamEngine(
     private var pending: Pending? = null
     private var stalls = 0
     private var nextVideoTry = 0.0
+    private var lastIngestCheck = 0.0
     private var rediscoverAt = 0.0
     private var backoffUntil = 0.0
     private var lastSweep = 0.0
@@ -769,6 +770,8 @@ class LookCamEngine(
                 val payload = client.get("/api/bridge/poll?wait=8")
                 console = "online"
                 val list = payload.optJSONArray("commands")
+                val serverIngest = if (payload.has("ingest")) payload.optBoolean("ingest", true) else true
+                val nowDesired: Boolean
                 synchronized(lock) {
                     val serverVideo = payload.optBoolean("video", false)
                     videoDesired = when (videoHold) {
@@ -776,9 +779,15 @@ class LookCamEngine(
                         2 -> false
                         else -> serverVideo
                     }
+                    nowDesired = videoDesired
                     val serverStream = payload.optInt("stream", streamNo)
                     val picked = if (streamHold == 2 || streamHold == 3) streamHold else serverStream
                     if (picked == 2 || picked == 3) streamNo = picked
+                }
+                val now = mono()
+                if (nowDesired && videoOpen && lastVideo > 0 && now - lastVideo < 3.0 && !serverIngest && now - lastIngestCheck > 4.0) {
+                    lastIngestCheck = now
+                    uploader.recycle("server ingest idle while camera streaming")
                 }
                 if (list == null) continue
                 for (i in 0 until list.length()) {

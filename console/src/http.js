@@ -222,7 +222,7 @@ function createApp(opts) {
 
   const bridgeLimiter = rateLimit({
     windowMs: 60 * 1000,
-    max: 20,
+    max: 60,
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many bridge attempts' },

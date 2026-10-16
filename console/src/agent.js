@@ -179,7 +179,13 @@ function sourceHasEntry(source, entry) {
 
 function cleanSource(source) {
   if (typeof source !== 'string') return '';
-  const normalized = source.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+  const normalized = source
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .trim()
+    .replace(/^```(?:[a-zA-Z0-9_+-]*)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
   if (!normalized) return '';
   const lines = normalized.split('\n');
   const suspicious = lines.some(
@@ -347,32 +353,43 @@ function normalizeImages(input) {
 }
 
 function parseModelJson(text) {
-  const trimmed = String(text || '')
-    .trim()
+  const raw = String(text || '').trim();
+  const candidates = [];
+  const stripped = raw
     .replace(/^```(?:json)?/i, '')
     .replace(/```$/i, '')
     .trim();
-  const start = trimmed.indexOf('{');
-  const end = trimmed.lastIndexOf('}');
-  if (start < 0 || end <= start) {
-    const error = new Error('The model reply was not usable');
-    error.status = 502;
-    throw error;
+  candidates.push(stripped);
+  const fenceRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
+  let fenceMatch;
+  while ((fenceMatch = fenceRegex.exec(raw)) !== null) {
+    if (fenceMatch[1]) candidates.push(fenceMatch[1].trim());
   }
-  try {
-    const parsed = JSON.parse(trimmed.slice(start, end + 1));
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      const error = new Error('The model reply was not usable');
-      error.status = 502;
-      throw error;
+  for (const item of candidates) {
+    const start = item.indexOf('{');
+    const end = item.lastIndexOf('}');
+    if (start < 0 || end <= start) continue;
+    const slice = item.slice(start, end + 1);
+    try {
+      const parsed = JSON.parse(slice);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch {
+      try {
+        const repaired = slice.replace(/,\s*([}\]])/g, '$1');
+        const parsed = JSON.parse(repaired);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed;
+        }
+      } catch {
+        // try next candidate
+      }
     }
-    return parsed;
-  } catch (error) {
-    if (error.status) throw error;
-    const wrapped = new Error('The model reply was not usable');
-    wrapped.status = 502;
-    throw wrapped;
   }
+  const error = new Error('The model reply was not usable');
+  error.status = 502;
+  throw error;
 }
 
 function schemaFor(task) {
@@ -582,6 +599,7 @@ function promptFor(task, context) {
 
 function createGemini({ apiKey, model, fetchImpl }) {
   const fetchFn = fetchImpl || fetch;
+  const supportsThinkingLevel = /^gemini-[34]/i.test(String(model || MODEL));
   async function generate(task, context) {
     const built = promptFor(task, context);
     const parts = [{ text: built.user }];
@@ -594,6 +612,17 @@ function createGemini({ apiKey, model, fetchImpl }) {
       if (img && img.mime && img.data) {
         parts.push({ inline_data: { mime_type: img.mime, data: img.data } });
       }
+    }
+    const generationConfig = {
+      temperature: task === 'solve' || task === 'retry' ? 0.25 : 0.1,
+      maxOutputTokens: 32768,
+      responseMimeType: 'application/json',
+      responseSchema: schemaFor(task),
+    };
+    if (supportsThinkingLevel) {
+      generationConfig.thinkingConfig = {
+        thinkingLevel: task === 'solve' || task === 'retry' ? 'MEDIUM' : 'LOW',
+      };
     }
     let lastError = null;
     for (let tryNum = 0; tryNum < 2; tryNum += 1) {
@@ -610,14 +639,9 @@ function createGemini({ apiKey, model, fetchImpl }) {
             body: JSON.stringify({
               systemInstruction: { parts: [{ text: built.system }] },
               contents: [{ role: 'user', parts }],
-              generationConfig: {
-                temperature: task === 'solve' || task === 'retry' ? 0.25 : 0.1,
-                maxOutputTokens: 16384,
-                responseMimeType: 'application/json',
-                responseSchema: schemaFor(task),
-              },
+              generationConfig,
             }),
-            signal: AbortSignal.timeout(90_000),
+            signal: AbortSignal.timeout(120_000),
           },
         );
       } catch (err) {
@@ -880,6 +904,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
       let fixes = 0;
       state.attempt = attempt;
       state.step = 'solve';
+      say(`Writing C++17 solution inside ${state.entry}() (attempt ${attempt}/${MAX_APPROACHES})…`);
       const hint = state.pendingHint || state.hint;
       state.pendingHint = '';
       const written = await talk(task, {
@@ -1041,6 +1066,11 @@ function createAgentControl({ apiKey, model, generate, run }) {
     const attachmentLabel = images.length > 1 ? `${images.length} images attached` : 'Image attached';
     const userLabel = text && images.length > 0 ? `${text}\n(${attachmentLabel})` : text || attachmentLabel;
     state.messages = [{ role: 'user', text: redact(userLabel, secret), kind: 'user' }];
+    say(
+      images.length > 0
+        ? `Analyzing ${images.length} attached screenshot${images.length === 1 ? '' : 's'} to extract the problem statement, signature, and sample cases…`
+        : 'Analyzing problem statement, signature, and sample cases…',
+    );
     try {
       const found = await talk('identify', {
         text,
@@ -1062,8 +1092,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
           : `Target template: ${state.entry}() (${state.signature}). main() will parse the test input and format the output.`,
       );
       state.step = 'cases';
-      if (state.casesFromProblem) {
-        if (!validCases(found.cases)) refuse(502, 'The model reply was not usable');
+      if (state.casesFromProblem && validCases(found.cases)) {
         state.cases = found.cases.map((item) => ({
           input: item.input,
           expected: item.expected,

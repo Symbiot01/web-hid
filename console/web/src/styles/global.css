@@ -1166,6 +1166,35 @@ textarea:focus-visible {
   align-items: center;
 }
 
+.ide-agent-live {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  color: var(--text);
+  font-size: 0.74rem;
+  font-weight: 500;
+}
+
+.ide-agent-spinner {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid rgba(96, 165, 250, 0.35);
+  border-top-color: #60a5fa;
+  animation: ide-spin 750ms linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes ide-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .ide-step-pill {
   font-size: 0.68rem;
   padding: 2px 7px;

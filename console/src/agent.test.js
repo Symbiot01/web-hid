@@ -44,6 +44,8 @@ function passRun() {
 
 test('parses model JSON and checks image bytes', () => {
   assert.equal(parseModelJson('```json\n{"ok":true}\n```').ok, true);
+  assert.equal(parseModelJson('Here is the JSON:\n```json\n{"ok":true,}\n```\nHope this helps!').ok, true);
+  assert.equal(cleanSource('```cpp\nint main() { return 0; }\n```'), 'int main() { return 0; }\n');
   assert.equal(imageOk(null), true);
   assert.equal(imageOk({ mime: 'image/jpeg', data: Buffer.from([0xff, 0xd8, 0xff]).toString('base64') }), true);
   assert.equal(imageOk({ mime: 'image/jpeg', data: Buffer.from('nope').toString('base64') }), false);

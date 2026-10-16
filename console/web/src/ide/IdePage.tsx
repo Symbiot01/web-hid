@@ -476,7 +476,33 @@ export function IdePage({ busy, onLogout }: Props) {
 
   async function send(text: string, images: { mime: string; base64: string }[]) {
     const active = tabs.find((tab) => tab.id === activeTabId);
-    if (mode === 'agent') setAgentPhase('working');
+    const attachmentLabel = images.length > 1 ? `${images.length} images attached` : 'Image attached';
+    const userLabel = text && images.length > 0 ? `${text}\n(${attachmentLabel})` : text || attachmentLabel;
+    if (mode === 'agent') {
+      const starting = agentPhase === 'idle';
+      setAgentPhase('working');
+      if (starting) {
+        setAgentStep('identify');
+        setAgentAttempt(0);
+      }
+      setMessages((prev) => [
+        ...(starting ? [] : prev),
+        { id: nextId('msg'), role: 'user', text: userLabel, kind: 'user' },
+        {
+          id: nextId('msg'),
+          role: 'assistant',
+          text:
+            images.length > 0
+              ? `Analyzing ${images.length} attached screenshot${images.length === 1 ? '' : 's'} to extract the problem statement, signature, and sample cases…`
+              : starting
+                ? 'Analyzing problem statement, signature, and sample cases…'
+                : 'Applying your guidance…',
+          kind: 'step',
+        },
+      ]);
+    } else {
+      setMessages((prev) => [...prev, { id: nextId('msg'), role: 'user', text: userLabel, kind: 'user' }]);
+    }
     try {
       if (mode === 'ask') {
         const response = await fetch('/api/agent/ask', {
@@ -488,7 +514,6 @@ export function IdePage({ busy, onLogout }: Props) {
         const payload = (await response.json()) as { text?: string; error?: string };
         setMessages((prev) => [
           ...prev,
-          { id: nextId('msg'), role: 'user', text },
           { id: nextId('msg'), role: 'assistant', text: payload.text || payload.error || 'No answer.' },
         ]);
         setAgentPhase('idle');
@@ -522,7 +547,18 @@ export function IdePage({ busy, onLogout }: Props) {
       });
       const payload = (await response.json()) as AgentView & { error?: string };
       if (!response.ok || payload.error) {
-        setAgentPhase(agentPhase === 'working' ? 'needs_human' : agentPhase);
+        if (response.status === 409) {
+          const current = await fetch('/api/agent', { credentials: 'same-origin' })
+            .then((r) => (r.ok ? (r.json() as Promise<AgentView>) : null))
+            .catch(() => null);
+          if (current) {
+            applyAgent(current);
+            return;
+          }
+          setAgentPhase('working');
+          return;
+        }
+        setAgentPhase('needs_human');
         setMessages((prev) => [...prev, { id: nextId('msg'), role: 'assistant', text: payload.error || 'The agent stopped' }]);
         return;
       }

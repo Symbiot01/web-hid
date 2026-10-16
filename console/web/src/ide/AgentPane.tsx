@@ -150,6 +150,16 @@ export function AgentPane({
     blocked: 'Check cases',
   };
 
+  const stageDetail: Record<AgentStep, string> = {
+    idle: 'Starting…',
+    identify: 'Extracting problem statement, constraints & sample cases from your input…',
+    cases: 'Preparing and verifying bare-bones stdin/stdout test cases…',
+    harness: `Building main() test wrapper around ${entry}()…`,
+    solve: `Writing C++17 solution in ${entry}()${attempt > 0 ? ` (attempt ${attempt}/${maxAttempts})` : ''}…`,
+    test: `Compiling and running ${cases.length || ''} test case${cases.length === 1 ? '' : 's'}…`,
+    done: 'Completed.',
+  };
+
   useEffect(() => {
     const el = feedRef.current;
     if (!el) return;
@@ -379,6 +389,12 @@ export function AgentPane({
               </span>
             ) : null}
           </div>
+          {working ? (
+            <div className="ide-agent-live" role="status" aria-live="polite">
+              <span className="ide-agent-spinner" aria-hidden="true" />
+              <span>{stageDetail[step] || 'Working…'}</span>
+            </div>
+          ) : null}
         </div>
       ) : null}
       <ol ref={feedRef} className="ide-feed">

@@ -134,6 +134,9 @@ function stopIngest(slot = 'cam') {
 
 /**
  * Pipe one Annex-B H.264 feed into ffmpeg. The bridge does not transcode.
+ * If an older ingest connection is still sitting in the slot (e.g. a half-open
+ * mobile socket after a network handoff), replace it cleanly so the freshly
+ * authenticated bridge stream takes over immediately.
  * @param {import('node:stream').Readable} input
  * @param {string} srtUrl
  * @param {(result: { ok: true } | { ok: false, status: number }) => void} ready
@@ -144,13 +147,12 @@ function startIngest(input, srtUrl, ready, slot = 'cam') {
     ready({ ok: false, status: 400 });
     return;
   }
-  if (slots[slot]) {
-    ready({ ok: false, status: 409 });
-    return;
-  }
   if (!fs.existsSync(FFMPEG)) {
     ready({ ok: false, status: 503 });
     return;
+  }
+  if (slots[slot]) {
+    stopIngest(slot);
   }
 
   const child = spawn(
