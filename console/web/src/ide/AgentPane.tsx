@@ -25,6 +25,7 @@ type Props = {
   title?: string;
   entry?: string;
   signature?: string;
+  activity?: string;
   cases: TestCase[];
   configured: boolean;
   messages: AgentMessage[];
@@ -123,6 +124,7 @@ export function AgentPane({
   title = '',
   entry = 'solve',
   signature = '',
+  activity = '',
   cases,
   configured,
   messages,
@@ -392,7 +394,7 @@ export function AgentPane({
           {working ? (
             <div className="ide-agent-live" role="status" aria-live="polite">
               <span className="ide-agent-spinner" aria-hidden="true" />
-              <span>{stageDetail[step] || 'Working…'}</span>
+              <span>{activity || stageDetail[step] || 'Working…'}</span>
             </div>
           ) : null}
         </div>
@@ -450,7 +452,7 @@ export function AgentPane({
           id="agent-draft"
           rows={3}
           value={draft}
-          disabled={!configured || (working && mode === 'ask')}
+          disabled={!configured || working}
           placeholder={
             dragging
               ? 'Drop one or more images (PNG, JPEG, WebP) here to attach…'
@@ -530,7 +532,7 @@ export function AgentPane({
           <button
             type="submit"
             className="btn primary ide-mini"
-            disabled={!configured || (draft.trim().length === 0 && images.length === 0) || (working && mode === 'ask')}
+            disabled={!configured || working || (draft.trim().length === 0 && images.length === 0)}
           >
             {mode === 'agent' && phase !== 'idle' && images.length === 0 ? 'Guide' : 'Send'}
           </button>

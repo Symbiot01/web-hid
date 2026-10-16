@@ -65,6 +65,7 @@ class BridgeForegroundService : Service() {
                 stopBridge()
                 return START_NOT_STICKY
             }
+            ACTION_RESTART -> restartBridge()
             ACTION_RECONNECT -> engine?.requestReconnect()
             ACTION_HOLD -> engine?.setVideoHold(intent.getIntExtra(EXTRA_HOLD, 0))
             else -> startBridge()
@@ -94,43 +95,82 @@ class BridgeForegroundService : Service() {
         acquireLocks(log)
         startInForeground(notification(BridgeSnapshot(running = true, phase = "starting", detail = "Starting")))
         BridgeStore.setRunning(this, true)
-        val next = LookCamEngine(
+        lateinit var next: LookCamEngine
+        next = LookCamEngine(
             config,
             log,
             onSnapshot = { snapshot ->
-                BridgeRuntime.update(snapshot)
-                if (snapshot.camera.count { it == '.' } == 3) BridgeStore.rememberCamera(this, snapshot.camera)
-                val now = System.currentTimeMillis()
-                if (now - lastNotify > 1000) {
-                    lastNotify = now
-                    notify(snapshot)
+                if (BridgeRuntime.engine === next) {
+                    BridgeRuntime.update(snapshot)
+                    if (snapshot.camera.count { it == '.' } == 3) BridgeStore.rememberCamera(this, snapshot.camera)
+                    val now = System.currentTimeMillis()
+                    if (now - lastNotify > 1000) {
+                        lastNotify = now
+                        notify(snapshot)
+                    }
                 }
             },
             onCameraIp = { ip -> BridgeStore.rememberCamera(this, ip) },
+            onRestartService = {
+                ContextCompat.getMainExecutor(this).execute {
+                    restartBridge()
+                }
+            },
         )
         engine = next
         BridgeRuntime.engine = next
-        worker = Thread({
+        val thread = Thread({
             try {
                 next.start()
             } catch (error: Exception) {
                 log.log(error, "engine crashed")
-                BridgeRuntime.update(BridgeSnapshot(phase = "failed", detail = error.message ?: "engine crashed"))
+                if (BridgeRuntime.engine === next) {
+                    BridgeRuntime.update(BridgeSnapshot(phase = "failed", detail = error.message ?: "engine crashed"))
+                }
             } finally {
-                BridgeStore.setRunning(this, false)
-                stopForeground(STOP_FOREGROUND_DETACH)
-                stopSelf()
+                if (engine === next) {
+                    BridgeStore.setRunning(this, false)
+                    stopForeground(STOP_FOREGROUND_DETACH)
+                    stopSelf()
+                }
             }
-        }, "lookcam-engine").apply { start() }
+        }, "lookcam-engine")
+        worker = thread
+        thread.start()
+    }
+
+    private fun restartBridge() {
+        recorder?.log("restart bridge requested (stop + start)")
+        val prevEngine = engine
+        val prevWorker = worker
+        engine = null
+        worker = null
+        if (BridgeRuntime.engine === prevEngine) BridgeRuntime.engine = null
+        prevEngine?.setVideoHold(2)
+        prevEngine?.shutdown()
+        Thread({
+            try {
+                prevWorker?.join(1200)
+            } catch (_: Exception) {
+            }
+            ContextCompat.getMainExecutor(this).execute {
+                startBridge()
+            }
+        }, "lookcam-restart").start()
     }
 
     private fun stopBridge() {
         BridgeStore.setRunning(this, false)
         recorder?.log("stop requested")
-        engine?.setVideoHold(2)
-        engine?.shutdown()
-        if (BridgeRuntime.engine === engine) BridgeRuntime.engine = null
-        worker?.join(1500)
+        val prevEngine = engine
+        val prevWorker = worker
+        engine = null
+        worker = null
+        if (BridgeRuntime.engine === prevEngine) BridgeRuntime.engine = null
+        prevEngine?.setVideoHold(2)
+        prevEngine?.shutdown()
+        prevWorker?.join(1500)
+        BridgeRuntime.update(BridgeSnapshot(running = false, phase = "idle", detail = "Stopped"))
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -242,6 +282,7 @@ class BridgeForegroundService : Service() {
 
     companion object {
         const val ACTION_STOP = "com.operator.bridge.STOP"
+        const val ACTION_RESTART = "com.operator.bridge.RESTART"
         const val ACTION_RECONNECT = "com.operator.bridge.RECONNECT"
         const val ACTION_HOLD = "com.operator.bridge.HOLD"
         const val EXTRA_HOLD = "hold"

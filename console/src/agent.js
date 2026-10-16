@@ -53,11 +53,28 @@ function entryFunction(name) {
   return member;
 }
 
+function sanitizeTextField(value) {
+  if (typeof value !== 'string') return '';
+  return value.replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t');
+}
+
+function sanitizeCaseItem(item) {
+  if (!item || typeof item !== 'object') return { input: '', expected: '' };
+  return {
+    ...item,
+    input: sanitizeTextField(item.input),
+    expected: sanitizeTextField(item.expected),
+  };
+}
+
 function entrySignature(entry, rawSignature) {
   const name = entryFunction(entry);
   if (name === 'solve') return 'void solve()';
-  const sig = clip(rawSignature, 300).trim();
-  return sig || `${name}(...)`;
+  const cleaned = clip(rawSignature, 300)
+    .replace(/\}\s*\{[\s\S]*$/, '')
+    .replace(/[\r\n]+/g, ' ')
+    .trim();
+  return cleaned || `${name}(...)`;
 }
 
 function wantsMoreCases(text, action) {
@@ -187,6 +204,10 @@ function cleanSource(source) {
     .replace(/\s*```$/i, '')
     .trim();
   if (!normalized) return '';
+  if (!normalized.includes('\n') && normalized.includes('\\n')) {
+    const unescaped = normalized.replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t');
+    return cleanSource(unescaped);
+  }
   const lines = normalized.split('\n');
   const suspicious = lines.some(
     (line) =>
@@ -290,6 +311,15 @@ function cleanSource(source) {
     if (ch === '\n') {
       out = out.replace(/[ \t]+$/, '');
       out += '\n';
+      while (normalized[i + 1] === ' ' || normalized[i + 1] === '\t') i += 1;
+      const upcomingClose = normalized[i + 1] === '}';
+      out += '  '.repeat(Math.max(0, upcomingClose ? indent - 1 : indent));
+      continue;
+    }
+    if (ch === '\\' && next === 'n' && !inString && !inLineComment && !inBlockComment) {
+      out = out.replace(/[ \t]+$/, '');
+      out += '\n';
+      i += 1;
       while (normalized[i + 1] === ' ' || normalized[i + 1] === '\t') i += 1;
       const upcomingClose = normalized[i + 1] === '}';
       out += '  '.repeat(Math.max(0, upcomingClose ? indent - 1 : indent));
@@ -492,22 +522,23 @@ function promptFor(task, context) {
       : '';
     return {
       system: [
-        'You extract programming problems from text or screenshots across any platform (Codeforces, LeetCode, AtCoder, CSES, ICPC, HackerRank, or custom specifications).',
-        'If multiple images/screenshots are provided, they show different parts of the SAME problem (description, examples, constraints, starter code template). Combine all images and any existing context into one complete specification.',
+        'You summarize programming problems from text or screenshots into your own concise technical specification.',
+        'IMPORTANT: Never transcribe or copy problem story text verbatim from screenshots (verbatim copying triggers recitation filters). Always paraphrase and synthesize the mathematical/algorithmic problem specification in your own words.',
+        'If multiple images/screenshots are provided, they show different parts of the SAME problem (description, examples, constraints, starter code template). Combine all images and any existing context into one specification.',
         'Reply with JSON only: {"title":"","statement":"","casesFromProblem":false,"cases":[{"input":"","expected":""}],"plan":"","functionName":"","signature":"","format":""}.',
         '- title: short problem title (e.g. "Median of Two Sorted Arrays", "Shortest Routes I").',
-        '- statement: complete, clean problem statement combining all parts, including input/output rules, constraints, and edge conditions. If a starter code template or class/function stub is shown in the prompt, screenshot, or editor, include that template signature in statement.',
+        '- statement: concise, paraphrased technical problem specification in your own words (what is given, what operations/rules apply, what to return/print, and exact numeric constraints). If a starter code template or class/function stub is shown in the prompt, screenshot, or editor, include that C++ signature.',
         '- casesFromProblem / cases: extract all sample inputs and outputs across all provided screenshots/context ONLY when shown in the problem. If none are shown, set casesFromProblem to false and cases to []. Never guess or invent sample outputs here.',
         '- Agentic Bare-Bones Competitive Programming Format (MANDATORY):',
-        '  * Convert every sample `input` and `expected` output into clean, bare-bones competitive programming stdin/stdout so `cin >>` can read it directly without string/bracket parsing:',
+        '  * Convert every sample `input` and `expected` output into clean, bare-bones competitive programming stdin/stdout so `cin >>` can read it directly without string/bracket parsing. Use real JSON newline escapes (`\\n`), never double-escaped `\\\\n`.',
         '  * 1D Arrays & Scalars: Strip variable labels (`arr[] =`, `nums1 =`, `target =`, `s =`), brackets `[...]`, `{...}`, quotes `"..."`, and commas. Prefix every 1D array with its length `n` on a line followed by `n` space-separated elements on the next line (unless `n` is already given immediately before it). Example: `arr[] = [1, 2, 3, 4, 5]` -> `"5\\n1 2 3 4 5\\n"`; `nums = [2,7,11,15], target = 9` -> `"4\\n2 7 11 15\\n9\\n"`.',
         '  * 2D Arrays / Grids: Convert `[[1,2,3],[4,5,6]]` into `"2 3\\n1 2 3\\n4 5 6\\n"` (`rows cols` followed by each row).',
-        '  * Query / Class-Design Problems (e.g. `["RandomizedCollection", "insert", "remove", "getRandom"]` with `[[], [1], [1], []]`, or `LRUCache`, `Trie`, `MinStack`): Convert the parallel command/argument arrays into bare-bones query lines: first line is the operation count `q` (plus any constructor args if needed), followed by `q` lines of `op arg1 arg2...` (e.g. `"6\\ninsert 1\\ninsert 1\\ninsert 2\\ngetRandom\\nremove 1\\ngetRandom\\n"`), and bare expected outputs (e.g. `"true false true 2 true 1\\n"` or one result per query).',
+        '  * Query / Class-Design Problems (e.g. `["LRUCache", "put", "get"]` with `[[2], [1, 1], [1]]`, or `RandomizedCollection`, `Trie`, `MinStack`): Convert the parallel command/argument arrays into bare-bones query lines: Line 1 is constructor argument(s) (if any) and operation count `q` (or `q` on Line 1 if no constructor args), followed by `q` lines of `op arg1 arg2...`. Omit `null` constructor/void outputs in `expected` and include only non-void query return values separated by spaces or newlines (and state that exact convention in `format`).',
         '  * Expected Outputs: Strip outer `[` `]`, quotes, and commas into bare space- or newline-separated tokens (e.g. `[0, 1]` -> `"0 1\\n"`).',
         '- Template vs. Standard Competitive Programming rule:',
-        '  1. IF a starter template / function or class signature is given in the problem or screenshot (e.g. LeetCode/HackerRank `class Solution` with `findMedianSortedArrays`, or an OOP design class like `class RandomizedCollection` / `class LRUCache`): conform strictly to that template — set `functionName` to that exact method or class name and `signature` to its exact C++17 signature.',
+        '  1. IF a starter template / function or class signature is given in the problem or screenshot (e.g. LeetCode/HackerRank `class Solution` with `findMedianSortedArrays`, or an OOP design class like `class LRUCache`): conform strictly to that template — set `functionName` to that exact method or class name and `signature` to its clean C++17 signature only (e.g. `"int trap(vector<int>& height)"` or `"class LRUCache { public: LRUCache(int capacity); int get(int key); void put(int key, int value); };"`).',
         '  2. OTHERWISE (standard stdin/stdout competitive programming like Codeforces, AtCoder, CSES, ICPC, or no template given): ALWAYS set `functionName` to `"solve"` and `signature` to `"void solve()"` (never `void solve(istream&, ostream&)`). In Codeforces style, `void solve()` reads directly from `cin` and writes directly to `cout`.',
-        '- format: precise description of the bare-bones stdin token order (e.g. "Line 1: n. Line 2: n space-separated integers." or "Line 1: q. Next q lines: operation name followed by its arguments.") and bare-bones stdout format.',
+        '- format: precise description of the bare-bones stdin token order and bare-bones stdout format used in `cases`.',
         '- plan: 1-2 sentences stating the optimal algorithm and its time and space complexity.',
       ].join('\n'),
       user: `Problem text:\n${clip(context.text, 12_000)}${prior}\n\nCurrent editor file:\n${source}`,
@@ -570,7 +601,7 @@ function promptFor(task, context) {
         `   - If a specific function or class template was given (\`${signature}\`): conform to that signature, put the algorithm inside \`${entry}\`, and keep \`main()\` at the bottom strictly as the test wrapper that parses bare-bones \`cin\`, calls/dispatches \`${entry}\`, and prints to \`cout\`.`,
         '   - Otherwise (standard competitive programming / Codeforces style): use `void solve()` with NO parameters (never `istream& in, ostream& out`). Read input directly from `cin` and print output directly to `cout` inside `solve()` (or per-testcase inside `solve()` with `int t; cin >> t; while (t--) solve();` in `main()`).',
         '3. Keep the code as simple, direct, and readable as possible — avoid over-engineering, unnecessary boilerplate, or stream-passing abstractions.',
-        '4. Cases use bare-bones whitespace-separated stdin (e.g. array size `n` followed by `n` space-separated elements `5\\n1 2 3 4 5\\n`, or `q` lines of `op arg...` for query/class problems). Read inputs with simple `cin >>` in `main()` (for template functions/classes) or `solve()`, and print bare space/newline-separated output matching Cases.',
+        '4. Cases use bare-bones whitespace-separated stdin (e.g. array size `n` followed by `n` space-separated elements `5\\n1 2 3 4 5\\n`, or constructor args + `q` lines of `op arg...` for query/class problems). Read inputs with simple `cin >>` in `main()` (for template functions/classes) or `solve()`, and print bare space/newline-separated output matching the exact `expected` strings in Cases. For strings that may be empty (`""`), use `getline(cin, s)` carefully so empty input does not fail `cin >> s`.',
         '5. Handle algorithmic edge cases: `long long` for 64-bit sums/products/distances, 1-based vs 0-based indexing, empty/single-element inputs, duplicates, and boundary constraints.',
         '6. Match the exact expected output format (`fixed << setprecision(...)`, `true`/`false`, `YES`/`NO`, or space/newline-separated answers).',
         '7. Format across multiple lines with 2-space indentation. Do not open files, spawn processes, or use the network. `approach` is 1-2 concise sentences stating the algorithm and time/space complexity.',
@@ -624,8 +655,47 @@ function createGemini({ apiKey, model, fetchImpl }) {
         thinkingLevel: task === 'solve' || task === 'retry' ? 'MEDIUM' : 'LOW',
       };
     }
+    const replyLabel = {
+      identify: 'problem read',
+      review: 'case check',
+      makeCases: 'test-case',
+      harness: 'test wrapper',
+      solve: 'solution',
+      retry: 'solution',
+      fix: 'repair',
+      ask: 'answer',
+    }[task] || 'model';
+    const failed = (reason) => {
+      const error = new Error(
+        reason === 'cut'
+          ? `The ${replyLabel} reply was cut off before it finished.`
+          : reason === 'http'
+            ? 'The model request failed'
+            : `The ${replyLabel} reply was not usable.`,
+      );
+      error.status = 502;
+      return error;
+    };
     let lastError = null;
-    for (let tryNum = 0; tryNum < 2; tryNum += 1) {
+    let sawRecitation = false;
+    for (let tryNum = 0; tryNum < 3; tryNum += 1) {
+      const config = { ...generationConfig };
+      if (tryNum > 0 && config.thinkingConfig) config.thinkingConfig = { thinkingLevel: 'LOW' };
+      if (sawRecitation) {
+        config.temperature = Math.max(config.temperature || 0.2, 0.45);
+      }
+      if (tryNum === 2) {
+        delete config.responseSchema;
+        delete config.thinkingConfig;
+      }
+      const antiRecitationSuffix = sawRecitation
+        ? '\n\nIMPORTANT: Do NOT quote or copy text verbatim from the problem or image. Paraphrase the problem specification and constraints completely in your own concise words and reply with one JSON object only.'
+        : tryNum === 2
+          ? '\n\nReply with one JSON object only.'
+          : '';
+      const userParts = antiRecitationSuffix
+        ? [{ text: `${built.user}${antiRecitationSuffix}` }, ...parts.slice(1)]
+        : parts;
       let response;
       try {
         response = await fetchFn(
@@ -638,8 +708,8 @@ function createGemini({ apiKey, model, fetchImpl }) {
             },
             body: JSON.stringify({
               systemInstruction: { parts: [{ text: built.system }] },
-              contents: [{ role: 'user', parts }],
-              generationConfig,
+              contents: [{ role: 'user', parts: userParts }],
+              generationConfig: config,
             }),
             signal: AbortSignal.timeout(120_000),
           },
@@ -649,27 +719,36 @@ function createGemini({ apiKey, model, fetchImpl }) {
         continue;
       }
       if (!response.ok) {
-        lastError = new Error('The model request failed');
-        lastError.status = 502;
-        if (response.status >= 500 || response.status === 429) continue;
+        lastError = failed('http');
+        if (response.status >= 500 || response.status === 429 || response.status === 400) continue;
         throw lastError;
       }
       try {
         const payload = await response.json();
-        const chunks =
-          payload && payload.candidates && payload.candidates[0] && payload.candidates[0].content
-            ? payload.candidates[0].content.parts || []
-            : [];
-        const text = chunks
+        const candidate = payload && payload.candidates && payload.candidates[0];
+        if (candidate && candidate.finishReason === 'RECITATION') {
+          sawRecitation = true;
+        }
+        const chunks = candidate && candidate.content ? candidate.content.parts || [] : [];
+        const visible = chunks
           .filter((part) => part && !part.thought && typeof part.text === 'string')
           .map((part) => part.text)
           .join('');
+        const thoughts = chunks
+          .filter((part) => part && part.thought && typeof part.text === 'string')
+          .map((part) => part.text)
+          .join('');
+        const text = visible.trim() ? visible : thoughts;
+        if (!text.trim() || (candidate && candidate.finishReason === 'MAX_TOKENS')) {
+          lastError = failed('cut');
+          continue;
+        }
         return parseModelJson(redact(text, apiKey));
       } catch (err) {
-        lastError = err;
+        lastError = err && err.status ? err : failed('bad');
       }
     }
-    const error = new Error(lastError && lastError.status ? lastError.message : 'The model request failed');
+    const error = lastError && lastError.status ? lastError : failed('http');
     error.status = 502;
     throw error;
   }
@@ -722,13 +801,23 @@ function createAgentControl({ apiKey, model, generate, run }) {
     messages: [],
     output: '',
     failure: '',
+    activity: '',
   };
 
   function say(text, kind) {
     const clean = redact(clip(text, 4_000), secret);
     if (!clean) return;
-    state.messages.push({ role: 'assistant', text: clean, kind: kind || 'step' });
+    const messageKind = kind || 'step';
+    state.messages.push({ role: 'assistant', text: clean, kind: messageKind });
+    if (messageKind === 'step') state.activity = clean;
     if (state.messages.length > 40) state.messages.splice(0, state.messages.length - 40);
+  }
+
+  function busy() {
+    const error = new Error('Agent is already working');
+    error.status = 409;
+    error.view = snapshot();
+    throw error;
   }
 
   function noteOutput(text) {
@@ -763,6 +852,8 @@ function createAgentControl({ apiKey, model, generate, run }) {
         id: `agent-${index + 1}`,
       })),
       output: state.output,
+      activity: state.activity,
+      running: state.running,
     };
   }
 
@@ -853,7 +944,8 @@ function createAgentControl({ apiKey, model, generate, run }) {
     if (!validCases(made && made.cases)) refuse(502, 'The model reply was not usable');
     const seen = new Set(state.cases.map((item) => item.input.trim()));
     const fresh = [];
-    for (const item of made.cases) {
+    for (const rawItem of made.cases) {
+      const item = sanitizeCaseItem(rawItem);
       const key = item.input.trim();
       if (!key || seen.has(key)) continue;
       seen.add(key);
@@ -874,6 +966,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
     } else {
       state.cases = [...state.cases, ...added];
       say(`Added ${added.length} new edge test case${added.length === 1 ? '' : 's'} (${state.cases.length} total). Running the test suite.`);
+      state.casesVerified = false;
     }
 
     if (state.source && validSource(state.source, secret)) {
@@ -977,7 +1070,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
           say('Stopping here. Tell me which expected output is wrong, or edit the case below and retry.');
           return;
         }
-        const checked = await reviewCases();
+        const checked = state.casesVerified ? { ok: true, reason: '' } : await reviewCases();
         if (!checked.ok) {
           state.phase = 'blocked';
           say(
@@ -987,6 +1080,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
           );
           return;
         }
+        state.casesVerified = true;
         if (attempt === MAX_APPROACHES) {
           state.phase = 'needs_human';
           say(
@@ -1011,7 +1105,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
   }
 
   function reset() {
-    if (state.running) refuse(409, 'Agent is already working');
+    if (state.running) busy();
     state.phase = 'idle';
     state.step = 'idle';
     state.attempt = 0;
@@ -1032,12 +1126,13 @@ function createAgentControl({ apiKey, model, generate, run }) {
     state.messages = [];
     state.output = '';
     state.failure = '';
+    state.activity = '';
     return snapshot();
   }
 
   async function begin(input) {
     if (secret.length < 20) refuse(503, 'Agent is not configured');
-    if (state.running) refuse(409, 'Agent is already working');
+    if (state.running) busy();
     const text = clip(input && input.text, 12_000);
     const parsedImages = normalizeImages(input);
     if (!parsedImages.ok) refuse(400, `Up to ${MAX_IMAGES} JPEG, PNG, or WebP images under 4 MB each`);
@@ -1078,14 +1173,14 @@ function createAgentControl({ apiKey, model, generate, run }) {
         images,
         source: clip(input.source, SOURCE_LIMIT),
       });
-      state.title = clip(found.title, 160);
-      state.statement = clip(found.statement, 12_000);
+      state.title = clip(sanitizeTextField(found.title), 160);
+      state.statement = clip(sanitizeTextField(found.statement), 12_000);
       state.casesFromProblem = found.casesFromProblem === true;
-      if (!state.statement) refuse(502, 'The model reply was not usable');
+      if (!state.statement) refuse(502, 'The problem read reply did not include a statement.');
       say(state.statement, 'problem');
       state.entry = entryFunction(found.functionName);
       state.signature = entrySignature(state.entry, found.signature);
-      state.format = clip(found.format, 1_000);
+      state.format = clip(sanitizeTextField(found.format), 1_000);
       say(
         state.entry === 'solve'
           ? `Target: void solve() using cin/cout directly with #include <bits/stdc++.h>.`
@@ -1093,15 +1188,18 @@ function createAgentControl({ apiKey, model, generate, run }) {
       );
       state.step = 'cases';
       if (state.casesFromProblem && validCases(found.cases)) {
-        state.cases = found.cases.map((item) => ({
-          input: item.input,
-          expected: item.expected,
-          actual: '',
-          stderr: '',
-          reason: null,
-          timeMs: 0,
-          status: 'idle',
-        }));
+        state.cases = found.cases.map((rawItem) => {
+          const item = sanitizeCaseItem(rawItem);
+          return {
+            input: item.input,
+            expected: item.expected,
+            actual: '',
+            stderr: '',
+            reason: null,
+            timeMs: 0,
+            status: 'idle',
+          };
+        });
         say(`Loaded ${state.cases.length} sample case${state.cases.length === 1 ? '' : 's'} (bare-bones stdin format). Verifying by hand.`);
         const checked = await reviewCases();
         if (!checked.ok) {
@@ -1118,19 +1216,22 @@ function createAgentControl({ apiKey, model, generate, run }) {
         say('No sample cases in the problem. Generating bare-bones test cases from the statement.');
         const made = await talk('makeCases', { statement: state.statement, format: state.format, cases: [] });
         if (!validCases(made.cases)) refuse(502, 'The model reply was not usable');
-        state.cases = made.cases.slice(0, 4).map((item) => ({
-          input: item.input,
-          expected: item.expected,
-          actual: '',
-          stderr: '',
-          reason: null,
-          timeMs: 0,
-          status: 'idle',
-        }));
+        state.cases = made.cases.slice(0, 4).map((rawItem) => {
+          const item = sanitizeCaseItem(rawItem);
+          return {
+            input: item.input,
+            expected: item.expected,
+            actual: '',
+            stderr: '',
+            reason: null,
+            timeMs: 0,
+            status: 'idle',
+          };
+        });
         say(`Created ${state.cases.length} test case${state.cases.length === 1 ? '' : 's'}.`);
       }
       if (found.plan) {
-        state.approach = clip(found.plan, 1_000);
+        state.approach = clip(sanitizeTextField(found.plan), 1_000);
         say(state.approach, 'plan');
       }
       await writeAndRun('solve');
@@ -1186,9 +1287,12 @@ function createAgentControl({ apiKey, model, generate, run }) {
       state.source = cleanSource(input.source);
     }
     if (input && Array.isArray(input.cases) && validCases(input.cases)) {
-      state.cases = input.cases.map((item, idx) => {
+      let anyChanged = false;
+      state.cases = input.cases.map((rawItem, idx) => {
+        const item = sanitizeCaseItem(rawItem);
         const prev = state.cases[idx];
         const unchanged = prev && prev.input === item.input && prev.expected === item.expected;
+        if (!unchanged) anyChanged = true;
         return {
           input: item.input,
           expected: item.expected,
@@ -1199,6 +1303,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
           status: unchanged ? prev.status || 'idle' : 'idle',
         };
       });
+      if (anyChanged) state.casesVerified = false;
     }
     if (extraImages.length > 0) {
       state.images = [...state.images, ...extraImages].slice(-MAX_IMAGES);
@@ -1220,9 +1325,9 @@ function createAgentControl({ apiKey, model, generate, run }) {
           images: state.images,
           source: state.source,
         });
-        if (merged && merged.title) state.title = clip(merged.title, 160);
+        if (merged && merged.title) state.title = clip(sanitizeTextField(merged.title), 160);
         if (merged && merged.statement) {
-          state.statement = clip(merged.statement, 12_000);
+          state.statement = clip(sanitizeTextField(merged.statement), 12_000);
           say(state.statement, 'problem');
         }
         if (merged && merged.functionName) {
@@ -1233,10 +1338,11 @@ function createAgentControl({ apiKey, model, generate, run }) {
           }
         }
         if (merged && merged.signature) state.signature = entrySignature(state.entry, merged.signature);
-        if (merged && merged.format) state.format = clip(merged.format, 1_000);
+        if (merged && merged.format) state.format = clip(sanitizeTextField(merged.format), 1_000);
         if (merged && merged.casesFromProblem && validCases(merged.cases)) {
           const seen = new Set(state.cases.map((item) => item.input.trim()));
-          for (const item of merged.cases) {
+          for (const rawItem of merged.cases) {
+            const item = sanitizeCaseItem(rawItem);
             const key = item.input.trim();
             if (!key || seen.has(key) || state.cases.length >= CASE_LIMIT) continue;
             seen.add(key);
@@ -1249,10 +1355,11 @@ function createAgentControl({ apiKey, model, generate, run }) {
               timeMs: 0,
               status: 'idle',
             });
+            state.casesVerified = false;
           }
         }
         if (merged && merged.plan) {
-          state.approach = clip(merged.plan, 1_000);
+          state.approach = clip(sanitizeTextField(merged.plan), 1_000);
         }
         state.hint = text || 'Use all combined problem parts, constraints, and sample cases.';
         await writeAndRun(state.source ? 'retry' : 'solve');
@@ -1326,6 +1433,8 @@ module.exports = {
   redact,
   entryFunction,
   entrySignature,
+  sanitizeTextField,
+  sanitizeCaseItem,
   sourceHasEntry,
   cleanSource,
   wantsMoreCases,

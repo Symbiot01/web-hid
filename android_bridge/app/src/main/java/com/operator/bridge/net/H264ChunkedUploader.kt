@@ -16,6 +16,7 @@ class H264ChunkedUploader(
     private val box = ArrayBlockingQueue<ByteArray>(400)
     private val stop = AtomicBoolean(false)
     private val generation = AtomicLong(0)
+    private val lock = Any()
     @Volatile private var thread: Thread? = null
     @Volatile private var activeConn: HttpURLConnection? = null
     @Volatile var connected = false
@@ -34,20 +35,29 @@ class H264ChunkedUploader(
     }
 
     fun ensure() {
-        stop.set(false)
-        val current = thread
-        if (current != null && current.isAlive) return
-        val gen = generation.incrementAndGet()
-        thread = Thread({ runLoop(gen) }, "h264-$gen").apply { isDaemon = true; start() }
+        synchronized(lock) {
+            stop.set(false)
+            val current = thread
+            if (current != null && current.isAlive) return
+            val gen = generation.incrementAndGet()
+            thread = Thread({ runLoop(gen) }, "h264-$gen").apply { isDaemon = true; start() }
+        }
     }
 
     fun halt() {
-        stop.set(true)
-        generation.incrementAndGet()
-        connected = false
-        box.clear()
-        val conn = activeConn
-        activeConn = null
+        val conn: HttpURLConnection?
+        val worker: Thread?
+        synchronized(lock) {
+            stop.set(true)
+            generation.incrementAndGet()
+            connected = false
+            box.clear()
+            conn = activeConn
+            activeConn = null
+            worker = thread
+            thread = null
+        }
+        worker?.interrupt()
         if (conn != null) {
             Thread({
                 try {
@@ -56,16 +66,22 @@ class H264ChunkedUploader(
                 }
             }, "h264-abort").apply { isDaemon = true; start() }
         }
-        thread?.interrupt()
     }
 
     /** Force-recycle the current upload connection without stopping video queuing. */
     fun recycle(reason: String) {
         log("h264 upload recycle: $reason")
-        val nextGen = generation.incrementAndGet()
-        connected = false
-        val conn = activeConn
-        activeConn = null
+        val conn: HttpURLConnection?
+        synchronized(lock) {
+            val nextGen = generation.incrementAndGet()
+            connected = false
+            conn = activeConn
+            activeConn = null
+            thread?.interrupt()
+            if (!stop.get()) {
+                thread = Thread({ runLoop(nextGen) }, "h264-$nextGen").apply { isDaemon = true; start() }
+            }
+        }
         if (conn != null) {
             Thread({
                 try {
@@ -74,26 +90,18 @@ class H264ChunkedUploader(
                 }
             }, "h264-recycle").apply { isDaemon = true; start() }
         }
-        thread?.interrupt()
-        if (!stop.get()) {
-            thread = Thread({ runLoop(nextGen) }, "h264-$nextGen").apply { isDaemon = true; start() }
-        }
     }
 
     private fun runLoop(gen: Long) {
-        var failures = 0
         while (!stop.get() && generation.get() == gen) {
             try {
                 post(gen)
-                failures = 0
             } catch (error: Exception) {
                 if (stop.get() || generation.get() != gen) break
                 connected = false
-                failures += 1
                 this.error = "upload failed"
-                log("h264 upload failed ($failures): ${error.javaClass.simpleName}")
-                val delay = minOf(5_000L, 600L * (1L shl minOf(failures - 1, 3)))
-                sleep(delay)
+                log("h264 upload failed: ${error.javaClass.simpleName}")
+                sleep(400)
             }
         }
         if (generation.get() == gen) {
@@ -110,23 +118,15 @@ class H264ChunkedUploader(
             setRequestProperty("Connection", "close")
             doOutput = true
             setChunkedStreamingMode(8192)
-            connectTimeout = 12_000
-            readTimeout = 15_000
+            connectTimeout = 20_000
+            readTimeout = 20_000
         }
         activeConn = conn
         var stream: OutputStream? = null
-        var idlePolls = 0
         try {
             stream = conn.outputStream
             while (!stop.get() && generation.get() == gen) {
-                val item = box.poll(500, TimeUnit.MILLISECONDS)
-                if (item == null) {
-                    idlePolls += 1
-                    // Don't hold an idle chunked socket open forever when no video bytes are arriving.
-                    if (idlePolls >= 16) break
-                    continue
-                }
-                idlePolls = 0
+                val item = box.poll(500, TimeUnit.MILLISECONDS) ?: continue
                 stream.write(item)
                 stream.flush()
                 if (generation.get() == gen) {
@@ -144,9 +144,9 @@ class H264ChunkedUploader(
                 if (status == 401) {
                     log("bridge token was rejected")
                     stop.set(true)
-                } else if (status == 409 || status == 429) {
-                    error = if (status == 429) "rate limited" else "ingest busy"
-                    sleep(if (status == 429) 4000 else 1500)
+                } else if (status == 409) {
+                    error = "ingest busy"
+                    sleep(2000)
                 }
             }
         } finally {

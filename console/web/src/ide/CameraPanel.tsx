@@ -306,9 +306,18 @@ export function CameraPanel({ active, stream, onStream, onOpenStream, onStopStre
                 className="btn ghost ide-mini"
                 disabled={busy}
                 onClick={() => void run('reconnect')}
-                title="Tell camera bridge to reset UDP session"
+                title="Tell camera bridge to reset UDP session and rebind socket"
               >
                 3. Recover Bridge
+              </button>
+              <button
+                type="button"
+                className="btn ghost ide-mini"
+                disabled={busy}
+                onClick={() => void run('restart')}
+                title="Stop and start the Android bridge engine cleanly (full reset)"
+              >
+                4. Stop & Start Bridge
               </button>
             </div>
           </div>

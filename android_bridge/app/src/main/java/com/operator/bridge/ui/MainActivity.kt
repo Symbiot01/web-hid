@@ -58,6 +58,14 @@ class MainActivity : AppCompatActivity() {
             if (engine == null) toast("Start the bridge first")
             else engine.requestReconnect()
         }
+        findViewById<Button>(R.id.restartButton).setOnClickListener {
+            if (!BridgeRuntime.snapshot.running) {
+                toast("Start the bridge first")
+            } else {
+                startService(Intent(this, BridgeForegroundService::class.java).setAction(BridgeForegroundService.ACTION_RESTART))
+                toast("Restarting bridge (Stop + Start)…")
+            }
+        }
         findViewById<Button>(R.id.followButton).setOnClickListener { hold(0) }
         findViewById<Button>(R.id.holdOnButton).setOnClickListener { hold(1) }
         findViewById<Button>(R.id.holdOffButton).setOnClickListener { hold(2) }

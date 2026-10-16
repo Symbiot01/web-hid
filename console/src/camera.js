@@ -88,6 +88,7 @@ function text(value, min, max) {
 /** @type {Record<string, { required?: Record<string, Rule>, optional?: Record<string, Rule>, atLeastOne?: boolean }>} */
 const COMMANDS = {
   reconnect: {},
+  restart: {},
   GetDevInfo: {},
   GetDevStream: {},
   GetDevVideoInfo: {},
@@ -381,7 +382,7 @@ function createCameraControl(options = {}) {
       return Promise.resolve({ status: 429, payload: { error: 'Too many camera commands' } });
     }
     const id = crypto.randomBytes(8).toString('hex');
-    const op = parsed.name === 'reconnect' ? 'reconnect' : 'call';
+    const op = parsed.name === 'reconnect' || parsed.name === 'restart' ? parsed.name : 'call';
     return new Promise((resolve) => {
       const timer = schedule(() => {
         pending.delete(id);

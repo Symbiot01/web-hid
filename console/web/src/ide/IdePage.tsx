@@ -106,6 +106,7 @@ export function IdePage({ busy, onLogout }: Props) {
   const [agentTitle, setAgentTitle] = useState('');
   const [agentEntry, setAgentEntry] = useState('solve');
   const [agentSignature, setAgentSignature] = useState('');
+  const [agentActivity, setAgentActivity] = useState('');
   const [agentReady, setAgentReady] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmLogout, setConfirmLogout] = useState(false);
@@ -135,6 +136,7 @@ export function IdePage({ busy, onLogout }: Props) {
   }, []);
   const menuRef = useRef<HTMLDivElement>(null);
   const runSeq = useRef(0);
+  const awaitingAgent = useRef(false);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -396,6 +398,7 @@ export function IdePage({ busy, onLogout }: Props) {
     setAgentTitle(view.title ?? '');
     setAgentEntry(view.entry ?? 'solve');
     setAgentSignature(view.signature ?? '');
+    setAgentActivity(view.activity ?? '');
     setMessages(
       view.messages.map((item, index) => ({
         id: `agent-msg-${index}`,
@@ -467,7 +470,9 @@ export function IdePage({ busy, onLogout }: Props) {
       void fetch('/api/agent', { credentials: 'same-origin' })
         .then((response) => (response.ok ? response.json() : null))
         .then((view: AgentView | null) => {
-          if (view) applyAgent(view);
+          if (!view) return;
+          if (awaitingAgent.current && view.phase !== 'working') return;
+          applyAgent(view);
         })
         .catch(() => undefined);
     }, 1500);
@@ -485,20 +490,17 @@ export function IdePage({ busy, onLogout }: Props) {
         setAgentStep('identify');
         setAgentAttempt(0);
       }
+      const live =
+        images.length > 0
+          ? `Reading ${images.length} screenshot${images.length === 1 ? '' : 's'} and extracting the problem…`
+          : starting
+            ? 'Reading the problem and extracting the statement…'
+            : 'Applying your guidance…';
+      setAgentActivity(live);
       setMessages((prev) => [
         ...(starting ? [] : prev),
         { id: nextId('msg'), role: 'user', text: userLabel, kind: 'user' },
-        {
-          id: nextId('msg'),
-          role: 'assistant',
-          text:
-            images.length > 0
-              ? `Analyzing ${images.length} attached screenshot${images.length === 1 ? '' : 's'} to extract the problem statement, signature, and sample cases…`
-              : starting
-                ? 'Analyzing problem statement, signature, and sample cases…'
-                : 'Applying your guidance…',
-          kind: 'step',
-        },
+        { id: nextId('msg'), role: 'assistant', text: live, kind: 'step' },
       ]);
     } else {
       setMessages((prev) => [...prev, { id: nextId('msg'), role: 'user', text: userLabel, kind: 'user' }]);
@@ -521,6 +523,7 @@ export function IdePage({ busy, onLogout }: Props) {
       }
       const starting = agentPhase === 'idle';
       const serializedImages = images.map((item) => ({ mime: item.mime, data: item.base64 }));
+      awaitingAgent.current = true;
       const response = await fetch(starting ? '/api/agent' : '/api/agent/guide', {
         method: 'POST',
         credentials: 'same-origin',
@@ -546,26 +549,23 @@ export function IdePage({ busy, onLogout }: Props) {
         ),
       });
       const payload = (await response.json()) as AgentView & { error?: string };
+      if (response.status === 409 && payload.phase) {
+        applyAgent(payload);
+        return;
+      }
       if (!response.ok || payload.error) {
-        if (response.status === 409) {
-          const current = await fetch('/api/agent', { credentials: 'same-origin' })
-            .then((r) => (r.ok ? (r.json() as Promise<AgentView>) : null))
-            .catch(() => null);
-          if (current) {
-            applyAgent(current);
-            return;
-          }
-          setAgentPhase('working');
-          return;
-        }
         setAgentPhase('needs_human');
-        setMessages((prev) => [...prev, { id: nextId('msg'), role: 'assistant', text: payload.error || 'The agent stopped' }]);
+        setAgentActivity('');
+        setMessages((prev) => [...prev, { id: nextId('msg'), role: 'assistant', text: payload.error || 'The agent stopped', kind: 'step' }]);
         return;
       }
       applyAgent(payload);
     } catch {
       setAgentPhase('needs_human');
-      setMessages((prev) => [...prev, { id: nextId('msg'), role: 'assistant', text: 'The agent is unreachable.' }]);
+      setAgentActivity('');
+      setMessages((prev) => [...prev, { id: nextId('msg'), role: 'assistant', text: 'The agent is unreachable.', kind: 'step' }]);
+    } finally {
+      awaitingAgent.current = false;
     }
   }
 
@@ -587,6 +587,8 @@ export function IdePage({ busy, onLogout }: Props) {
     }
     const active = tabs.find((tab) => tab.id === activeTabId);
     setAgentPhase('working');
+    setAgentActivity('Applying your guidance…');
+    awaitingAgent.current = true;
     void fetch('/api/agent/guide', {
       method: 'POST',
       credentials: 'same-origin',
@@ -599,14 +601,23 @@ export function IdePage({ busy, onLogout }: Props) {
     })
       .then((response) => response.json())
       .then((payload: AgentView & { error?: string }) => {
-        if (payload.error) {
-          setAgentPhase('needs_human');
-          setMessages((prev) => [...prev, { id: nextId('msg'), role: 'assistant', text: payload.error as string }]);
+        if (payload.phase) {
+          applyAgent(payload);
           return;
         }
-        applyAgent(payload);
+        if (payload.error) {
+          setAgentPhase('needs_human');
+          setAgentActivity('');
+          setMessages((prev) => [...prev, { id: nextId('msg'), role: 'assistant', text: payload.error as string, kind: 'step' }]);
+        }
       })
-      .catch(() => setAgentPhase('needs_human'));
+      .catch(() => {
+        setAgentPhase('needs_human');
+        setAgentActivity('');
+      })
+      .finally(() => {
+        awaitingAgent.current = false;
+      });
   }
 
   return (
@@ -700,6 +711,7 @@ export function IdePage({ busy, onLogout }: Props) {
                 title={agentTitle}
                 entry={agentEntry}
                 signature={agentSignature}
+                activity={agentActivity}
                 cases={cases}
                 configured={agentReady}
                 messages={messages}

@@ -69,6 +69,7 @@ class LookCamEngine(
     private val recorder: DiagnosticRecorder,
     private val onSnapshot: (BridgeSnapshot) -> Unit,
     private val onCameraIp: (String) -> Unit,
+    private val onRestartService: () -> Unit = {},
 ) {
     private val stop = AtomicBoolean(false)
     private val lock = Any()
@@ -85,8 +86,10 @@ class LookCamEngine(
     @Volatile private var resultLine = ResultLine()
     @Volatile private var configured = false
     @Volatile private var password = ""
+    @Volatile private var lastKnownIp = config.lastIp
     private var passwordChanged = false
     private var forceReconnect = false
+    private var forceRestart = false
     private var attempt = 1
     private var phase = "searching"
     private var detail = "looking for the camera"
@@ -123,17 +126,10 @@ class LookCamEngine(
     private var txPackets = 0L
     private var gaps = 0L
     private var hotspotLabel = targets.summary.take(80)
-    private lateinit var socket: DatagramSocket
+    @Volatile private var socket: DatagramSocket = DatagramSocket(null)
 
-    fun start() {
-        LookCamProtocol.runSelfTest()
-        recorder.log("protocol self-test passed device=${config.device}")
-        if (config.token.length < 16) {
-            recorder.log("bridge token missing")
-            publish("token", "Bridge token is required")
-            return
-        }
-        socket = DatagramSocket(null).apply {
+    private fun openUdpSocket(): DatagramSocket {
+        return DatagramSocket(null).apply {
             reuseAddress = true
             broadcast = true
             try {
@@ -144,6 +140,17 @@ class LookCamEngine(
             bind(InetSocketAddress(0))
             soTimeout = 100
         }
+    }
+
+    fun start() {
+        LookCamProtocol.runSelfTest()
+        recorder.log("protocol self-test passed device=${config.device}")
+        if (config.token.length < 16) {
+            recorder.log("bridge token missing")
+            publish("token", "Bridge token is required")
+            return
+        }
+        socket = openUdpSocket()
         recorder.log("udp bound ${socket.localAddress.hostAddress}:${socket.localPort}")
         recorder.log("discovery ${targets.summary}")
         Thread({ pollLoop() }, "bridge-poll").apply { isDaemon = true; start() }
@@ -168,19 +175,42 @@ class LookCamEngine(
             }
         } finally {
             uploader.halt()
-            socket.close()
+            try {
+                socket.close()
+            } catch (_: Exception) {
+            }
             recorder.log("engine stopped")
             publish(phase, detail)
         }
     }
 
     fun shutdown() {
-        stop.set(true)
+        if (!stop.compareAndSet(false, true)) return
+        val current = peer
+        if (current != null) {
+            for (i in 0 until 2) {
+                send(LookCamProtocol.pppp(0xF0), current)
+            }
+        }
+        uploader.halt()
+        try {
+            socket.close()
+        } catch (_: Exception) {
+        }
     }
 
     fun requestReconnect() {
         synchronized(lock) { forceReconnect = true }
         recorder.log("reconnect requested from the phone")
+    }
+
+    fun requestRestart() {
+        synchronized(lock) {
+            videoHold = 0
+            streamHold = 0
+            forceRestart = true
+        }
+        recorder.log("full bridge restart requested")
     }
 
     /** 0 follows the console, 1 holds video on, 2 pauses video and upload. */
@@ -279,12 +309,18 @@ class LookCamEngine(
             send(LookCamProtocol.pppp(0xE0), current ?: return)
             lastAlive = now
         }
-        tickPending(now)
-        if (pending != null) return
-        if (takeReconnect()) {
-            reset("reconnect requested")
+        if (takeRestart()) {
+            reset("bridge restarted", hard = true)
+            pushStatus()
             return
         }
+        if (takeReconnect()) {
+            reset("reconnect requested", hard = true)
+            pushStatus()
+            return
+        }
+        tickPending(now)
+        if (pending != null) return
         if (ready && !loginOk && now >= nextVideoTry) {
             if (password.isEmpty()) {
                 setPhase("login", "camera password is not configured")
@@ -355,7 +391,7 @@ class LookCamEngine(
 
     private fun search() {
         val packet = LookCamProtocol.pppp(0x30)
-        val pinned = listOf(config.pinnedIp, config.lastIp).filter { HotspotNetworkFinder.reachable(it) }
+        val pinned = listOf(config.pinnedIp, lastKnownIp, config.lastIp).filter { HotspotNetworkFinder.reachable(it) }
         for (ip in (pinned + targets.neighbors).distinct()) sendTo(packet, ip, LookCamProtocol.SEARCH_PORT)
         for (ip in targets.broadcasts) sendTo(packet, ip, LookCamProtocol.SEARCH_PORT)
         val now = mono()
@@ -539,21 +575,30 @@ class LookCamEngine(
         val type = data[1].toInt() and 0xFF
         val known = peer
         if (known != null && addr.address.hostAddress != known.address.hostAddress) return
-        if (type == 0x41 && body.size >= 20 && body.copyOfRange(0, 20).contentEquals(uid) && !ready) {
-            peer = addr
-            peerSince = mono()
-            lastRx = peerSince
-            send(LookCamProtocol.pppp(0x41, uid), addr)
-            lastPunch = mono()
-            val ip = addr.address.hostAddress ?: ""
-            recorder.log("punch from $ip:${addr.port}")
-            if (ip.isNotEmpty()) onCameraIp(ip)
-            return
+        if (type == 0x41 && body.size >= 20 && body.copyOfRange(0, 20).contentEquals(uid)) {
+            if (ready && known != null && addr.port != known.port) {
+                recorder.log("camera rebooted or switched port ${known.port} -> ${addr.port}, resetting session")
+                reset("camera re-punched from new port", hard = false)
+            }
+            if (!ready) {
+                peer = addr
+                peerSince = mono()
+                lastRx = peerSince
+                send(LookCamProtocol.pppp(0x41, uid), addr)
+                lastPunch = mono()
+                val ip = addr.address.hostAddress ?: ""
+                recorder.log("punch from $ip:${addr.port}")
+                if (ip.isNotEmpty()) {
+                    lastKnownIp = ip
+                    onCameraIp(ip)
+                }
+                return
+            }
         }
         if (type == 0x42 && (body.size >= 20 && body.copyOfRange(0, 20).contentEquals(uid) || known != null && addr.address.hostAddress == known.address.hostAddress)) {
             lastRx = mono()
+            peer = addr
             if (!ready) {
-                peer = addr
                 ready = true
                 recorder.log("session ready ${addr.port}")
                 send(LookCamProtocol.pppp(0xE0), addr)
@@ -563,6 +608,9 @@ class LookCamEngine(
             return
         }
         if (known == null || addr.address.hostAddress != known.address.hostAddress) return
+        if (addr.port != known.port) {
+            peer = addr
+        }
         lastRx = mono()
         when (type) {
             0xE0 -> send(LookCamProtocol.pppp(0xE1), addr)
@@ -648,9 +696,37 @@ class LookCamEngine(
         else if (gapSince == 0.0) gapSince = now
     }
 
-    private fun reset(reason: String) {
-        attempt += 1
-        val delay = minOf(8.0, 0.4 * (1 shl minOf(attempt, 4)))
+    private fun reset(reason: String, hard: Boolean = false) {
+        val current = peer
+        if (current != null) {
+            for (i in 0 until 2) {
+                send(LookCamProtocol.pppp(0xF0), current)
+            }
+        }
+        val currentPending = pending
+        if (currentPending != null && currentPending.kind == "user" && !currentPending.id.isNullOrEmpty()) {
+            enqueueResult(currentPending.id, false, "interrupted by $reason", null)
+        }
+        if (hard) {
+            synchronized(lock) {
+                while (commands.isNotEmpty()) {
+                    val cmd = commands.removeFirst()
+                    enqueueResult(cmd.optString("id", ""), false, "cancelled by $reason", null)
+                }
+            }
+            attempt = 1
+        } else {
+            attempt += 1
+        }
+        try {
+            val prev = socket
+            socket = openUdpSocket()
+            prev.close()
+            recorder.log("udp rebound ${socket.localAddress.hostAddress}:${socket.localPort}")
+        } catch (error: Exception) {
+            recorder.log("udp rebind failed: ${error.javaClass.simpleName}")
+        }
+        val delay = if (hard) 0.0 else minOf(4.0, 0.4 * (1 shl minOf(attempt, 3)))
         peer = null
         ready = false
         loginOk = false
@@ -664,6 +740,11 @@ class LookCamEngine(
         lastVideo = 0.0
         videoOpenedAt = 0.0
         lastRx = mono()
+        lastSearch = 0.0
+        lastPunch = 0.0
+        lastAlive = 0.0
+        lastSweep = 0.0
+        lastTargetsAt = 0.0
         cmdIdx = 0
         userId = 1
         pending = null
@@ -795,8 +876,12 @@ class LookCamEngine(
                     when (command.optString("op")) {
                         "configure" -> configure(command)
                         "reconnect" -> {
-                            synchronized(lock) { forceReconnect = true }
-                            enqueueResult(command.optString("id"), true, "reconnecting", null)
+                            triggerServiceRestart(command.optString("id"))
+                            return
+                        }
+                        "restart" -> {
+                            triggerServiceRestart(command.optString("id"))
+                            return
                         }
                         "call" -> {
                             var busy = false
@@ -863,6 +948,25 @@ class LookCamEngine(
         putOutbox("/api/bridge/result", JSONObject().put("id", id).put("ok", ok).put("detail", text).put("body", body ?: JSONObject.NULL))
     }
 
+    private fun triggerServiceRestart(id: String) {
+        recorder.log("service restart command received from console")
+        if (id.isNotEmpty()) {
+            try {
+                client.post(
+                    "/api/bridge/result",
+                    JSONObject()
+                        .put("id", id)
+                        .put("ok", true)
+                        .put("detail", "bridge stopped and restarted cleanly")
+                        .put("body", JSONObject.NULL),
+                )
+            } catch (_: Exception) {
+                enqueueResult(id, true, "bridge restarting", null)
+            }
+        }
+        onRestartService()
+    }
+
     private fun putOutbox(path: String, payload: JSONObject) {
         if (!outbox.offer(path to payload)) {
             outbox.poll()
@@ -875,6 +979,12 @@ class LookCamEngine(
     private fun takeReconnect(): Boolean = synchronized(lock) {
         if (!forceReconnect) return false
         forceReconnect = false
+        true
+    }
+
+    private fun takeRestart(): Boolean = synchronized(lock) {
+        if (!forceRestart) return false
+        forceRestart = false
         true
     }
 

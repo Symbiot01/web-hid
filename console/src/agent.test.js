@@ -6,10 +6,12 @@ const {
   MODEL,
   cleanSource,
   createAgentControl,
+  createGemini,
   entryFunction,
   entrySignature,
   imageOk,
   parseModelJson,
+  sanitizeCaseItem,
   sourceHasEntry,
   wantsMoreCases,
 } = require('./agent');
@@ -71,12 +73,80 @@ test('parses model JSON and checks image bytes', () => {
   assert.equal(wantsMoreCases('', 'more_cases'), true);
   assert.equal(wantsMoreCases('use dynamic programming instead'), false);
   assert.equal(
+    entrySignature(
+      'largestRectangleArea',
+      'int largestRectangleArea(vector<int>& heights)}{"title":"Largest Rectangle in Histogram"}',
+    ),
+    'int largestRectangleArea(vector<int>& heights)',
+  );
+  const unescapedCase = sanitizeCaseItem({
+    input: '10 3\\n1 5 3\\n4 8 7\\n6 9 1\\n',
+    expected: '10\\n',
+  });
+  assert.equal(unescapedCase.input, '10 3\n1 5 3\n4 8 7\n6 9 1\n');
+  assert.equal(unescapedCase.expected, '10\n');
+  assert.equal(
+    cleanSource('#include <bits/stdc++.h>\\nusing namespace std;\\nint main() { return 0; }\\n'),
+    '#include <bits/stdc++.h>\nusing namespace std;\nint main() { return 0; }\n',
+  );
+  assert.equal(
     sourceHasEntry(
       'class RandomizedCollection { public: RandomizedCollection(){} bool insert(int v){return true;} };\nint main(){ RandomizedCollection rc; rc.insert(1); return 0; }\n',
       'RandomizedCollection',
     ),
     true,
   );
+});
+
+test('retries on RECITATION finishReason with anti-recitation prompt', async () => {
+  const bodies = [];
+  const gen = createGemini({
+    apiKey: KEY,
+    model: MODEL,
+    fetchImpl: async (_url, opts) => {
+      bodies.push(JSON.parse(opts.body));
+      if (bodies.length === 1) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            candidates: [{ finishReason: 'RECITATION', content: { parts: [] } }],
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [
+            {
+              finishReason: 'STOP',
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify({
+                      title: 'LRU Cache',
+                      statement: 'Paraphrased LRU spec',
+                      casesFromProblem: true,
+                      cases: [{ input: '2 1\nget 1\n', expected: '-1\n' }],
+                      plan: 'List + hash map',
+                      functionName: 'LRUCache',
+                      signature: 'class LRUCache {};',
+                      format: 'cap q then ops',
+                    }),
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      };
+    },
+  });
+  const out = await gen('identify', { text: 'lru' });
+  assert.equal(out.title, 'LRU Cache');
+  assert.equal(bodies.length, 2);
+  assert.match(bodies[1].contents[0].parts[0].text, /Paraphrase/);
 });
 
 test('solved run writes the source and does not reveal the key', async () => {
@@ -410,6 +480,35 @@ test('combines multiple images at start and when follow-up screenshots are added
   assert.equal(second.phase, 'solved');
   assert.equal(second.cases.length, 2);
   assert.deepEqual(seenImages, [2, 3]);
+});
+
+test('a second start stays on the run already in progress', async () => {
+  let release = () => {};
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const agent = createAgentControl({
+    apiKey: KEY,
+    generate: async () => {
+      await gate;
+      const error = new Error('The problem read reply was not usable.');
+      error.status = 502;
+      throw error;
+    },
+    run: async () => passRun(),
+  });
+  const first = agent.begin({ text: 'problem' });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await assert.rejects(agent.begin({ text: 'again' }), (error) => {
+    assert.equal(error.status, 409);
+    assert.equal(error.view.phase, 'working');
+    assert.match(error.view.activity, /Analyzing problem statement/);
+    return true;
+  });
+  release();
+  const done = await first;
+  assert.equal(done.phase, 'needs_human');
+  assert.match(done.messages.map((item) => item.text).join('\n'), /problem read reply was not usable/);
 });
 
 test('ask does not return source', async () => {

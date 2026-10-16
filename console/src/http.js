@@ -99,7 +99,8 @@ function createApp(opts) {
   function agentError(res, error) {
     const status = error && error.status ? error.status : 500;
     const message = status === 500 ? 'The agent stopped' : error.message;
-    return res.status(status).json({ error: message });
+    const view = error && error.view && typeof error.view === 'object' ? error.view : null;
+    return res.status(status).json(view ? { ...view, error: message } : { error: message });
   }
 
   app.use((req, res, next) => {

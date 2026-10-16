@@ -3,6 +3,7 @@
     <string name="app_name">LookCam Bridge</string>
     <string name="start">Start bridge</string>
     <string name="stop">Stop bridge</string>
+    <string name="restart">Restart bridge</string>
     <string name="reconnect">Reconnect camera</string>
     <string name="settings">Connection settings</string>
     <string name="export_debug">Export debug bundle</string>

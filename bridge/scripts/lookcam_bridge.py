@@ -365,11 +365,12 @@ class Bridge:
         if self.ready and now - self.last_alive > 0.8:
             self._send(sock, pppp(0xE0))
             self.last_alive = now
+        if self._take_reconnect():
+            self._reset("reconnect requested", sock, hard=True)
+            self._push_status()
+            return
         self._tick_pending(sock, now)
         if self.pending:
-            return
-        if self._take_reconnect():
-            self._reset("reconnect requested")
             return
         if self.ready and not self.login_ok and now >= self.next_video_try:
             if not self.password:
@@ -704,9 +705,23 @@ class Bridge:
         self.cmd_idx = (self.cmd_idx + 1) & 0xFFFF
         return index
 
-    def _reset(self, reason: str) -> None:
-        self.attempt += 1
-        delay = min(8.0, 0.4 * (2 ** min(self.attempt, 4)))
+    def _reset(self, reason: str, sock: socket.socket | None = None, hard: bool = False) -> None:
+        if sock is not None and self.peer:
+            for _ in range(2):
+                self._send(sock, pppp(0xF0))
+        pending = self.pending
+        if pending and pending.get("kind") == "user" and pending.get("id"):
+            self._enqueue_result(pending["id"], False, f"interrupted by {reason}", None)
+        if hard:
+            with self.lock:
+                while self.commands:
+                    cmd = self.commands.popleft()
+                    if isinstance(cmd, dict) and cmd.get("id"):
+                        self._enqueue_result(cmd["id"], False, f"cancelled by {reason}", None)
+            self.attempt = 1
+        else:
+            self.attempt += 1
+        delay = 0.0 if hard else min(4.0, 0.4 * (2 ** min(self.attempt, 3)))
         self._reset_session()
         self.backoff_until = time.monotonic() + delay
         self._set_phase("searching", reason)
@@ -828,7 +843,7 @@ class Bridge:
                 op = command.get("op")
                 if op == "configure":
                     self._configure(command)
-                elif op == "reconnect":
+                elif op in ("reconnect", "restart"):
                     with self.lock:
                         self.force_reconnect = True
                     self._enqueue_result(command.get("id"), True, "reconnecting", None)

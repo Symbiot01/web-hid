@@ -58,6 +58,8 @@ export type AgentView = {
     status: TestStatus;
   }>;
   output: string;
+  activity?: string;
+  running?: boolean;
 };
 
 export const INITIAL_MAIN = `#include <bits/stdc++.h>

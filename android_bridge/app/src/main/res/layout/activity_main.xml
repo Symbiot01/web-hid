@@ -68,6 +68,11 @@
                 android:text="@string/reconnect" />
 
             <Button
+                android:id="@+id/restartButton"
+                style="@style/RowButton"
+                android:text="@string/restart" />
+
+            <Button
                 android:id="@+id/settingsButton"
                 style="@style/RowButton"
                 android:text="@string/settings" />

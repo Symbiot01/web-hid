@@ -30,6 +30,8 @@ test('rejects commands that were not captured', () => {
   );
   const ok = validateCommand('SetLed', { ledstatus: 0 });
   assert.equal('error' in ok, false);
+  assert.equal('error' in validateCommand('reconnect', {}), false);
+  assert.equal('error' in validateCommand('restart', {}), false);
 });
 
 test('redacts passwords from camera JSON', () => {
