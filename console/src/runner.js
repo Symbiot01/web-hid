@@ -13,8 +13,10 @@ const TOTAL_MAX = 512 * 1024;
 const OUTPUT_MAX = 64 * 1024;
 const COMPILE_MS = 10_000;
 const RUN_MS = 2_000;
-const COMPILE_AS = 512 * 1024 * 1024;
+const COMPILE_AS = 1024 * 1024 * 1024;
 const RUN_AS = 256 * 1024 * 1024;
+const COMPILE_FSIZE = 64 * 1024 * 1024;
+const RUN_FSIZE = 1024 * 1024;
 
 let busy = false;
 
@@ -89,14 +91,14 @@ function sandboxArgs(binds, command) {
   ];
 }
 
-function limited(addressBytes, wallMs, command) {
+function limited(addressBytes, wallMs, command, { fsizeBytes = RUN_FSIZE, includeNproc = false } = {}) {
   const seconds = Math.max(1, Math.ceil(wallMs / 1000));
-  return [
+  const args = [
     'prlimit',
     `--as=${addressBytes}`,
     `--data=${addressBytes}`,
-    '--fsize=1048576',
-    '--nproc=32',
+    `--fsize=${fsizeBytes}`,
+    ...(includeNproc ? ['--nproc=64'] : []),
     '--nofile=64',
     `--cpu=${seconds + 1}`,
     '--',
@@ -106,6 +108,7 @@ function limited(addressBytes, wallMs, command) {
     `${seconds}s`,
     ...command,
   ];
+  return args;
 }
 
 function capture(child, maxOutput) {
@@ -176,16 +179,18 @@ function spawnCommand(bin, args, { stdin, timeoutMs, cwd, env }) {
   });
 }
 
-async function spawnSandbox({ binds, command, workDir, stdin, timeoutMs }) {
+async function spawnSandbox({ binds, command, workDir, stdin, timeoutMs, addressBytes, fsizeBytes }) {
   try {
-    const res = await spawnCommand('bwrap', sandboxArgs(binds, command), { stdin, timeoutMs });
+    const sandboxCmd = limited(addressBytes, timeoutMs, command, { fsizeBytes, includeNproc: true });
+    const res = await spawnCommand('bwrap', sandboxArgs(binds, sandboxCmd), { stdin, timeoutMs });
     if (res.code !== 1 || !/^bwrap:/m.test(res.stderr)) {
       return res;
     }
   } catch (error) {
     if (!error || error.code !== 'ENOENT') throw error;
   }
-  const localCommand = command.map((arg) => (arg.startsWith('/work/') ? path.join(workDir, arg.slice(6)) : arg));
+  const hostCmd = limited(addressBytes, timeoutMs, command, { fsizeBytes, includeNproc: false });
+  const localCommand = hostCmd.map((arg) => (arg.startsWith('/work/') ? path.join(workDir, arg.slice(6)) : arg));
   return spawnCommand(localCommand[0], localCommand.slice(1), {
     stdin,
     timeoutMs,
@@ -209,9 +214,11 @@ async function compileAndRun(source, cases) {
     await fs.writeFile(path.join(dir, 'main.cpp'), source, { mode: 0o600 });
     const compile = await spawnSandbox({
       timeoutMs: COMPILE_MS,
+      addressBytes: COMPILE_AS,
+      fsizeBytes: COMPILE_FSIZE,
       workDir: dir,
       binds: ['--ro-bind', '/bin', '/bin', '--bind', dir, '/work'],
-      command: limited(COMPILE_AS, COMPILE_MS, [
+      command: [
         'g++',
         '-std=c++17',
         '-O2',
@@ -221,7 +228,7 @@ async function compileAndRun(source, cases) {
         '-o',
         '/work/main',
         '/work/main.cpp',
-      ]),
+      ],
     });
     const compileProblem = classify(compile);
     if (compileProblem || compile.code !== 0) {
@@ -243,10 +250,12 @@ async function compileAndRun(source, cases) {
     if (cases === null) {
       const result = await spawnSandbox({
         timeoutMs: RUN_MS,
+        addressBytes: RUN_AS,
+        fsizeBytes: RUN_FSIZE,
         stdin: '',
         workDir: dir,
         binds: ['--ro-bind', binary, '/work/main'],
-        command: limited(RUN_AS, RUN_MS, ['/work/main']),
+        command: ['/work/main'],
       });
       return {
         status: 'ran',
@@ -265,10 +274,12 @@ async function compileAndRun(source, cases) {
     for (const item of cases) {
       const result = await spawnSandbox({
         timeoutMs: RUN_MS,
+        addressBytes: RUN_AS,
+        fsizeBytes: RUN_FSIZE,
         stdin: item.input,
         workDir: dir,
         binds: ['--ro-bind', binary, '/work/main'],
-        command: limited(RUN_AS, RUN_MS, ['/work/main']),
+        command: ['/work/main'],
       });
       const reason = classify(result);
       const actual = result.stdout.slice(0, OUTPUT_MAX);

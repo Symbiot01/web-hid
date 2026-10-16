@@ -570,3 +570,67 @@ test('unconfigured agent refuses and the HTTP status hides the key', async () =>
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test('removes hardcoded test-case checks and repairs miscalculated synthetic cases', async () => {
+  const { agent, calls } = harness(
+    {
+      identify: [
+        {
+          title: 'Repeated String Construction',
+          statement: 'Construct lexicographically smallest string of length n.',
+          casesFromProblem: false,
+          cases: [],
+          plan: 'Compute ceil(count[c] / k) for each character.',
+          functionName: 'solve',
+          signature: 'void solve()',
+          format: 'n on line 1, data on line 2',
+        },
+      ],
+      makeCases: [
+        {
+          cases: [{ input: '5\nzzzzz\n', expected: 'aaaaz\n' }],
+        },
+      ],
+      solve: [
+        {
+          source:
+            '#include <bits/stdc++.h>\nusing namespace std;\nvoid solve() {\n  int n; string data; cin >> n >> data;\n  if (n == 5 && data == "zzzzz") { cout << "aaaaz\\n"; return; }\n  cout << "zzzzz\\n";\n}\nint main() { solve(); return 0; }\n',
+          approach: 'Greedy frequency counts.',
+        },
+      ],
+      fix: [
+        {
+          source:
+            '#include <bits/stdc++.h>\nusing namespace std;\nvoid solve() {\n  cout << "zzzzz\\n";\n}\nint main() { solve(); return 0; }\n',
+        },
+      ],
+      review: [
+        {
+          ok: false,
+          reason: 'For n=5 and data=zzzzz, k=1 so the answer must be zzzzz, not aaaaz.',
+          cases: [{ input: '5\nzzzzz\n', expected: 'zzzzz\n' }],
+        },
+      ],
+      retry: [],
+      ask: [],
+    },
+    [
+      {
+        status: 'ran',
+        compile: { ok: true, stderr: '' },
+        cases: [{ status: 'fail', actual: 'zzzzz\n', reason: null, timeMs: 5 }],
+      },
+      {
+        status: 'ran',
+        compile: { ok: true, stderr: '' },
+        cases: [{ status: 'pass', actual: 'zzzzz\n', reason: null, timeMs: 5 }],
+      },
+    ],
+  );
+  const view = await agent.begin({ text: 'construct string' });
+  assert.deepEqual(calls, ['identify', 'makeCases', 'solve', 'fix', 'review']);
+  assert.equal(view.phase, 'solved');
+  assert.equal(view.cases[0].expected, 'zzzzz\n');
+  assert.equal(view.source.includes('aaaaz'), false);
+});
+

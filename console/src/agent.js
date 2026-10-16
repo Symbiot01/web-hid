@@ -330,6 +330,30 @@ function cleanSource(source) {
   return `${out.replace(/\n{3,}/g, '\n\n').trim()}\n`;
 }
 
+function hasHardcodedCases(source, cases) {
+  if (typeof source !== 'string' || !Array.isArray(cases) || cases.length === 0) return false;
+  const escapedLiteral = (val) => val.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  for (const item of cases) {
+    if (!item || typeof item.input !== 'string' || typeof item.expected !== 'string') continue;
+    const expected = item.expected.trim();
+    const tokens = item.input
+      .trim()
+      .split(/\s+/)
+      .filter((tok) => tok.length >= 3 && !/^-?[012]$/.test(tok));
+    if (expected.length >= 3 && !/^-?[01]$/.test(expected) && !/^(YES|NO|true|false)$/i.test(expected)) {
+      const expRegex = new RegExp(`["']${escapedLiteral(expected)}(?:\\\\n)?["']`);
+      if (expRegex.test(source)) return true;
+    }
+    for (const tok of tokens) {
+      if (tok.length >= 4 && /^[a-zA-Z0-9_-]+$/.test(tok)) {
+        const condRegex = new RegExp(`if\\s*\\([^)]*==\\s*["']?${escapedLiteral(tok)}["']?`);
+        if (condRegex.test(source)) return true;
+      }
+    }
+  }
+  return false;
+}
+
 function validSource(source, secret) {
   if (typeof source !== 'string' || source.length === 0 || source.length > SOURCE_LIMIT) return false;
   if (source.includes('\0') || !source.includes('main')) return false;
@@ -455,6 +479,17 @@ function schemaFor(task) {
       properties: {
         ok: { type: 'BOOLEAN' },
         reason: { type: 'STRING' },
+        cases: {
+          type: 'ARRAY',
+          items: {
+            type: 'OBJECT',
+            properties: {
+              input: { type: 'STRING' },
+              expected: { type: 'STRING' },
+            },
+            required: ['input', 'expected'],
+          },
+        },
       },
       required: ['ok', 'reason'],
     };
@@ -547,10 +582,11 @@ function promptFor(task, context) {
   if (task === 'review') {
     return {
       system: [
-        'You verify sample test cases by hand against the problem statement. Do not write a program. Reply with JSON only: {"ok":true,"reason":""}.',
+        'You verify sample test cases by hand against the problem statement. Do not write a program. Reply with JSON only: {"ok":true,"reason":"","cases":[{"input":"","expected":""}]}.',
         '- Note that Cases may be formatted in bare-bones competitive programming stdin/stdout (e.g. array size `n` followed by elements, or `q` lines of `op arg` queries without `null` for constructor).',
         '- If an operation is randomized (e.g. `getRandom()`) or the problem allows multiple valid answers ("return any valid..."), set `ok` to `true` as long as the expected output is a valid possible outcome.',
         '- Set `ok` to `false` ONLY when a sample expected output is mathematically impossible under the problem statement.',
+        '- Whenever you set `ok` to `false`, also return `cases` containing the full list of cases with every incorrect `expected` output repaired to the exact mathematically valid answer.',
       ].join('\n'),
       user: `Statement:\n${statement}\n\nCases:\n${cases}`,
     };
@@ -605,6 +641,8 @@ function promptFor(task, context) {
         '5. Handle algorithmic edge cases: `long long` for 64-bit sums/products/distances, 1-based vs 0-based indexing, empty/single-element inputs, duplicates, and boundary constraints.',
         '6. Match the exact expected output format (`fixed << setprecision(...)`, `true`/`false`, `YES`/`NO`, or space/newline-separated answers).',
         '7. Format across multiple lines with 2-space indentation. Do not open files, spawn processes, or use the network. `approach` is 1-2 concise sentences stating the algorithm and time/space complexity.',
+        '8. If `Previous result` shows failed test cases (`status: "wrong"` or `"tle"` or `"error"`), carefully inspect EVERY failed test case (`input`, `expected`, and `actual` output) to diagnose which missing edge case, boundary condition, integer overflow, or off-by-one bug caused the mismatch before writing the new solution.',
+        '9. STRICT ANTI-CHEAT / NO HARDCODING RULE: NEVER hardcode specific test case inputs or expected outputs (e.g., NEVER write `if (n == 5 && data == "zzzzz") return ...;` or check for specific sample values). Every output must be computed purely by a general mathematical/algorithmic solution that works for all valid inputs up to the problem constraints.',
       ].join('\n'),
       user: `Statement:\n${statement}\n\nFunction:\n${entry}\n\nSignature:\n${signature}\n\nSample format:\n${format}\n\nCases:\n${cases}\n\nApproach:\n${hint || 'Use the simplest optimal algorithm that handles all constraints and edge cases.'}\n\nPrevious source:\n${source}\n\nPrevious result:\n${failure}`,
     };
@@ -617,6 +655,7 @@ function promptFor(task, context) {
         '- Prefer `#include <bits/stdc++.h>` and `using namespace std;` at the top.',
         `- Keep all algorithm logic inside \`${entry}\` above \`main()\`. If \`${entry}\` is \`solve\`, use \`void solve()\` reading from \`cin\` and writing to \`cout\` directly.`,
         `- Keep \`main()\` minimal at the bottom calling \`${entry}\`.`,
+        '- NEVER hardcode specific test case inputs or expected outputs (no `if (input == ...)` branches for sample cases); always use the general algorithm.',
         '- Format the code cleanly across multiple lines with 2-space indentation.',
       ].join('\n'),
       user: `What is wrong:\n${failure}\n\nFunction:\n${entry}\n\nSignature:\n${signature}\n\nSample format:\n${format}\n\nCases:\n${cases}\n\nSource:\n${source}`,
@@ -652,7 +691,7 @@ function createGemini({ apiKey, model, fetchImpl }) {
     };
     if (supportsThinkingLevel) {
       generationConfig.thinkingConfig = {
-        thinkingLevel: task === 'solve' || task === 'retry' ? 'MEDIUM' : 'LOW',
+        thinkingLevel: 'HIGH',
       };
     }
     const replyLabel = {
@@ -680,13 +719,12 @@ function createGemini({ apiKey, model, fetchImpl }) {
     let sawRecitation = false;
     for (let tryNum = 0; tryNum < 3; tryNum += 1) {
       const config = { ...generationConfig };
-      if (tryNum > 0 && config.thinkingConfig) config.thinkingConfig = { thinkingLevel: 'LOW' };
+      if (config.thinkingConfig) config.thinkingConfig = { thinkingLevel: 'HIGH' };
       if (sawRecitation) {
         config.temperature = Math.max(config.temperature || 0.2, 0.45);
       }
       if (tryNum === 2) {
         delete config.responseSchema;
-        delete config.thinkingConfig;
       }
       const antiRecitationSuffix = sawRecitation
         ? '\n\nIMPORTANT: Do NOT quote or copy text verbatim from the problem or image. Paraphrase the problem specification and constraints completely in your own concise words and reply with one JSON object only.'
@@ -867,7 +905,21 @@ function createAgentControl({ apiKey, model, generate, run }) {
     const verdict = await talk('review', { statement: state.statement, cases: state.cases });
     const ok = verdict.ok === true;
     const reason = clip(verdict.reason, 1_000);
-    return { ok, reason };
+    const repairedCases = validCases(verdict.cases)
+      ? verdict.cases.map((rawItem) => {
+          const item = sanitizeCaseItem(rawItem);
+          return {
+            input: item.input,
+            expected: item.expected,
+            actual: '',
+            stderr: '',
+            reason: null,
+            timeMs: 0,
+            status: 'idle',
+          };
+        })
+      : null;
+    return { ok, reason, repairedCases };
   }
 
   async function buildHarnessIfSupported() {
@@ -1032,6 +1084,22 @@ function createAgentControl({ apiKey, model, generate, run }) {
         }
         state.source = shapedClean;
       }
+      if (hasHardcodedCases(state.source, state.cases)) {
+        say('Removing hardcoded sample checks so the solution uses only the general algorithm.');
+        const dehardcoded = await talk('fix', {
+          source: state.source,
+          failure:
+            'The code contains hardcoded checks for specific test case inputs or expected outputs. Remove all hardcoded test-case branches and implement the pure general algorithm that solves the problem for all valid inputs.',
+          entry: state.entry,
+          signature: state.signature,
+          format: state.format,
+          cases: state.cases,
+        });
+        const dehardcodedClean = cleanSource(dehardcoded && dehardcoded.source);
+        if (validSource(dehardcodedClean, secret) && sourceHasEntry(dehardcodedClean, state.entry)) {
+          state.source = dehardcodedClean;
+        }
+      }
       const nextApproach = clip(written.approach, 1_000);
       if (nextApproach && (attempt > 1 || !state.messages.some((m) => m.kind === 'plan'))) {
         state.approach = nextApproach;
@@ -1072,6 +1140,16 @@ function createAgentControl({ apiKey, model, generate, run }) {
         }
         const checked = state.casesVerified ? { ok: true, reason: '' } : await reviewCases();
         if (!checked.ok) {
+          if (!state.casesFromProblem && checked.repairedCases && checked.repairedCases.length === state.cases.length) {
+            state.cases = checked.repairedCases;
+            state.casesVerified = true;
+            say(
+              checked.reason
+                ? `Repaired generated test case expected output (${checked.reason}) and re-checking.`
+                : 'Repaired generated test case expected output and re-checking.',
+            );
+            continue;
+          }
           state.phase = 'blocked';
           say(
             checked.reason
@@ -1088,12 +1166,20 @@ function createAgentControl({ apiKey, model, generate, run }) {
           );
           return;
         }
+        const failedSummary = state.cases
+          .map((item, idx) =>
+            item.status !== 'pass'
+              ? `Case ${idx + 1} (${item.status}): input=${JSON.stringify(clip(item.input, 200))} expected=${JSON.stringify(clip(item.expected, 200))} actual=${JSON.stringify(clip(item.actual, 200))}`
+              : null,
+          )
+          .filter(Boolean)
+          .join(' | ');
         say(
-          `${passedCount}/${state.cases.length} passed. The sample cases match the statement — checking input parsing and trying another approach (${attempt + 1}/${MAX_APPROACHES}).`,
+          `${passedCount}/${state.cases.length} passed. The sample cases match the statement — analyzing failing case(s) for missing edge cases and trying another approach (${attempt + 1}/${MAX_APPROACHES}).`,
         );
         state.hint =
           state.pendingHint ||
-          'Check whether main() misparsed the case input or output format; if parsing is right, use a different algorithm inside the solution function.';
+          `Inspect the failing test cases (${failedSummary}) against the problem statement to see what edge case, boundary condition, or parsing detail was missed, then fix the algorithm.`;
         break;
       }
       if (fixes >= MAX_COMPILE_FIXES && state.phase !== 'solved') {
