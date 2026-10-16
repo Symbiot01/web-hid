@@ -41,6 +41,14 @@ data class BridgeSnapshot(
     val gaps: Long = 0,
     val uploadQueue: Int = 0,
     val uploadConnected: Boolean = false,
+    val stream: Int = 2,
+    val videoHold: String = "follow",
+    val streamHold: String = "follow",
+    val resultSeq: Long = 0,
+    val lastCommand: String = "",
+    val lastOk: Boolean = true,
+    val lastDetail: String = "",
+    val lastBody: String = "",
 )
 
 private class Pending(
@@ -72,6 +80,9 @@ class LookCamEngine(
     private val uid = LookCamProtocol.packUid(config.device)
     @Volatile private var videoDesired = false
     @Volatile private var streamNo = 2
+    @Volatile private var videoHold = 0
+    @Volatile private var streamHold = 0
+    @Volatile private var resultLine = ResultLine()
     @Volatile private var configured = false
     @Volatile private var password = ""
     private var passwordChanged = false
@@ -169,6 +180,47 @@ class LookCamEngine(
     fun requestReconnect() {
         synchronized(lock) { forceReconnect = true }
         recorder.log("reconnect requested from the phone")
+    }
+
+    /** 0 follows the console, 1 holds video on, 2 pauses video and upload. */
+    fun setVideoHold(mode: Int) {
+        if (mode !in 0..2) return
+        synchronized(lock) {
+            videoHold = mode
+            when (mode) {
+                1 -> videoDesired = true
+                2 -> videoDesired = false
+            }
+        }
+        if (mode == 2) uploader.halt()
+        recorder.log("video hold $mode")
+        publish(phase, detail)
+    }
+
+    /** 0 follows the console. 2 and 3 pin that stream. */
+    fun setStreamHold(stream: Int) {
+        if (stream != 0 && stream != 2 && stream != 3) return
+        synchronized(lock) {
+            streamHold = stream
+            if (stream == 2 || stream == 3) streamNo = stream
+        }
+        recorder.log("stream hold $stream")
+        publish(phase, detail)
+    }
+
+    /** Queue a camera command from the phone. Returns an error, or empty when queued. */
+    fun submitLocal(name: String, args: JSONObject): String {
+        val clean = try {
+            LookCamProtocol.sanitize(name, args)
+        } catch (error: IllegalArgumentException) {
+            return error.message ?: "Invalid command"
+        }
+        synchronized(lock) {
+            if (commands.size >= 8) return "Bridge is busy"
+            commands.add(JSONObject().put("name", name).put("id", "").put("args", clean))
+        }
+        recorder.log("local command $name")
+        return ""
     }
 
     private fun receive() {
@@ -471,7 +523,9 @@ class LookCamEngine(
                 }
                 if (item.name in LookCamProtocol.NO_REPLY && ok) text = "Acknowledged. The camera sent no JSON."
                 recorder.log("${item.name} ${if (ok) "ok" else "failed"} $text")
-                enqueueResult(item.id ?: "", ok, text, LookCamProtocol.publicBody(msg))
+                val shown = LookCamProtocol.publicBody(msg)
+                remember(item.name, ok, text, shown)
+                enqueueResult(item.id ?: "", ok, text, shown)
             }
         }
     }
@@ -651,8 +705,34 @@ class LookCamEngine(
                 gaps = gaps,
                 uploadQueue = uploader.queued,
                 uploadConnected = uploader.connected,
+                stream = streamNo,
+                videoHold = holdLabel(videoHold),
+                streamHold = if (streamHold == 2 || streamHold == 3) streamHold.toString() else "follow",
+                resultSeq = resultLine.seq,
+                lastCommand = resultLine.name,
+                lastOk = resultLine.ok,
+                lastDetail = resultLine.detail,
+                lastBody = resultLine.body,
             ),
         )
+    }
+
+    private fun holdLabel(mode: Int) = when (mode) {
+        1 -> "on"
+        2 -> "paused"
+        else -> "follow"
+    }
+
+    private fun remember(name: String, ok: Boolean, text: String, body: JSONObject?) {
+        val shown = body?.toString() ?: ""
+        resultLine = ResultLine(
+            seq = resultLine.seq + 1,
+            name = name,
+            ok = ok,
+            detail = text.take(180),
+            body = shown.take(4000),
+        )
+        publish(phase, detail)
     }
 
     private fun pushStatus() {
@@ -690,9 +770,15 @@ class LookCamEngine(
                 console = "online"
                 val list = payload.optJSONArray("commands")
                 synchronized(lock) {
-                    videoDesired = payload.optBoolean("video", false)
-                    val next = payload.optInt("stream", streamNo)
-                    if (next == 2 || next == 3) streamNo = next
+                    val serverVideo = payload.optBoolean("video", false)
+                    videoDesired = when (videoHold) {
+                        1 -> true
+                        2 -> false
+                        else -> serverVideo
+                    }
+                    val serverStream = payload.optInt("stream", streamNo)
+                    val picked = if (streamHold == 2 || streamHold == 3) streamHold else serverStream
+                    if (picked == 2 || picked == 3) streamNo = picked
                 }
                 if (list == null) continue
                 for (i in 0 until list.length()) {
@@ -812,3 +898,11 @@ class LookCamEngine(
 
     private fun mono(): Double = System.nanoTime() / 1_000_000_000.0
 }
+
+private data class ResultLine(
+    val seq: Long = 0,
+    val name: String = "",
+    val ok: Boolean = true,
+    val detail: String = "",
+    val body: String = "",
+)

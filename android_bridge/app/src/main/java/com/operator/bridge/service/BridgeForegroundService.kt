@@ -24,6 +24,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 
 object BridgeRuntime {
     @Volatile var recorder: DiagnosticRecorder? = null
+    @Volatile var engine: LookCamEngine? = null
     @Volatile var snapshot = BridgeSnapshot()
     private val listeners = CopyOnWriteArrayList<(BridgeSnapshot) -> Unit>()
 
@@ -65,6 +66,7 @@ class BridgeForegroundService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_RECONNECT -> engine?.requestReconnect()
+            ACTION_HOLD -> engine?.setVideoHold(intent.getIntExtra(EXTRA_HOLD, 0))
             else -> startBridge()
         }
         return START_STICKY
@@ -75,6 +77,7 @@ class BridgeForegroundService : Service() {
         engine?.shutdown()
         recorder?.log("service destroyed")
         recorder?.close()
+        if (BridgeRuntime.engine === engine) BridgeRuntime.engine = null
         if (BridgeRuntime.recorder === recorder) BridgeRuntime.recorder = null
         super.onDestroy()
     }
@@ -106,6 +109,7 @@ class BridgeForegroundService : Service() {
             onCameraIp = { ip -> BridgeStore.rememberCamera(this, ip) },
         )
         engine = next
+        BridgeRuntime.engine = next
         worker = Thread({
             try {
                 next.start()
@@ -123,7 +127,9 @@ class BridgeForegroundService : Service() {
     private fun stopBridge() {
         BridgeStore.setRunning(this, false)
         recorder?.log("stop requested")
+        engine?.setVideoHold(2)
         engine?.shutdown()
+        if (BridgeRuntime.engine === engine) BridgeRuntime.engine = null
         worker?.join(1500)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -212,13 +218,23 @@ class BridgeForegroundService : Service() {
             Intent(this, BridgeForegroundService::class.java).setAction(ACTION_RECONNECT),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        val paused = snapshot.videoHold == "paused"
+        val hold = PendingIntent.getService(
+            this,
+            if (paused) 5 else 4,
+            Intent(this, BridgeForegroundService::class.java)
+                .setAction(ACTION_HOLD)
+                .putExtra(EXTRA_HOLD, if (paused) 0 else 2),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle("LookCam ${snapshot.phase}")
-            .setContentText(snapshot.detail)
+            .setContentText(if (paused) "Video paused · ${snapshot.detail}" else snapshot.detail)
             .setContentIntent(open)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+            .addAction(0, if (paused) "Follow console" else "Pause video", hold)
             .addAction(0, "Reconnect", reconnect)
             .addAction(0, "Stop", stop)
             .build()
@@ -227,6 +243,8 @@ class BridgeForegroundService : Service() {
     companion object {
         const val ACTION_STOP = "com.operator.bridge.STOP"
         const val ACTION_RECONNECT = "com.operator.bridge.RECONNECT"
+        const val ACTION_HOLD = "com.operator.bridge.HOLD"
+        const val EXTRA_HOLD = "hold"
         private const val CHANNEL = "lookcam-bridge"
         private const val NOTE_ID = 42
 

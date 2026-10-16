@@ -114,6 +114,103 @@ object LookCamProtocol {
 
     fun hex(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it) }
 
+    /**
+     * Same allow-list as the console. Returns a copy containing only accepted fields.
+     * @throws IllegalArgumentException when the name or a field is not allowed
+     */
+    fun sanitize(name: String, args: JSONObject): JSONObject {
+        val spec = SPECS[name] ?: throw IllegalArgumentException("Unknown command")
+        val seen = ArrayList<String>()
+        val keys = args.keys()
+        while (keys.hasNext()) seen.add(keys.next())
+        val allowed = spec.required + spec.optional
+        if (seen.any { it !in allowed }) throw IllegalArgumentException("Unknown field")
+        val out = JSONObject()
+        for (key in spec.required) out.put(key, readField(args, key, required = true))
+        for (key in spec.optional) {
+            if (!args.has(key)) continue
+            out.put(key, readField(args, key, required = false))
+        }
+        if (spec.atLeastOne && out.length() == 0) throw IllegalArgumentException("Missing a value")
+        return out
+    }
+
+    private data class Spec(val required: Set<String>, val optional: Set<String>, val atLeastOne: Boolean)
+
+    private val SPECS = mapOf(
+        "GetDevInfo" to Spec(emptySet(), emptySet(), false),
+        "GetDevStream" to Spec(emptySet(), emptySet(), false),
+        "GetDevVideoInfo" to Spec(emptySet(), emptySet(), false),
+        "GetAlarmInfo" to Spec(emptySet(), emptySet(), false),
+        "GetLedInfo" to Spec(emptySet(), emptySet(), false),
+        "searchWiFiList" to Spec(emptySet(), emptySet(), false),
+        "LevelFlip" to Spec(emptySet(), emptySet(), false),
+        "VerticalFlip" to Spec(emptySet(), emptySet(), false),
+        "SetLed" to Spec(setOf("ledstatus"), emptySet(), false),
+        "SetDevVideoInfo" to Spec(emptySet(), setOf("saturation", "brightness"), true),
+        "SetAlarmInfo" to Spec(
+            setOf("sensitivity", "goptime", "audio", "putalarm", "osd", "flag", "starttime", "endtime", "twotime", "twoend"),
+            emptySet(),
+            false,
+        ),
+        "SetLedInfo" to Spec(
+            setOf("control", "flag", "starttime", "endtime", "twotime", "twoend"),
+            emptySet(),
+            false,
+        ),
+        "OpenWifi" to Spec(setOf("sid", "wifiPwd"), emptySet(), false),
+        "ModifyPwd" to Spec(setOf("newpwd"), emptySet(), false),
+    )
+
+    private fun readField(args: JSONObject, key: String, required: Boolean): Any {
+        if (!args.has(key) || args.isNull(key)) {
+            if (required) throw IllegalArgumentException("Missing $key")
+            throw IllegalArgumentException("Missing $key")
+        }
+        val value = args.get(key)
+        return when (key) {
+            "ledstatus", "audio", "putalarm", "osd", "flag", "control" -> bit(value)
+            "sensitivity" -> integer(value, 0, 10)
+            "goptime" -> integer(value, 1, 120)
+            "saturation", "brightness" -> integer(value, 0, 100)
+            "starttime", "endtime", "twotime", "twoend" -> clock(value)
+            "sid" -> text(value, 1, 32)
+            "wifiPwd" -> text(value, 0, 64)
+            "newpwd" -> text(value, 1, 64)
+            else -> throw IllegalArgumentException("Unknown field")
+        }
+    }
+
+    private fun bit(value: Any): Int {
+        if (value !is Int || (value != 0 && value != 1)) throw IllegalArgumentException("Expected 0 or 1")
+        return value
+    }
+
+    private fun integer(value: Any, min: Int, max: Int): Int {
+        if (value !is Int || value < min || value > max) {
+            throw IllegalArgumentException("Expected an integer from $min to $max")
+        }
+        return value
+    }
+
+    private fun clock(value: Any): String {
+        if (value !is String || !CLOCK.matches(value)) throw IllegalArgumentException("Expected HH:MM")
+        val hour = value.substring(0, 2).toInt()
+        val minute = value.substring(3, 5).toInt()
+        if (hour > 23 || minute > 59) throw IllegalArgumentException("Expected HH:MM")
+        return value
+    }
+
+    private fun text(value: Any, min: Int, max: Int): String {
+        if (value !is String) throw IllegalArgumentException("Expected text")
+        if (value.any { it.code < 32 || it.code == 127 } || value.length !in min..max) {
+            throw IllegalArgumentException("Expected $min to $max characters")
+        }
+        return value
+    }
+
+    private val CLOCK = Regex("""\d{2}:\d{2}""")
+
     fun runSelfTest() {
         check(hex(packUid("GHBB-522328-BWDTT")) == EXPECTED_UID) { "uid" }
         check(hex(pppp(0x30)) == "f1300000") { "search" }
@@ -126,6 +223,22 @@ object LookCamProtocol {
         check(parsed?.optString("cmd") == "GetDevInfo") { "parse" }
         val clean = publicBody(parsed)
         check(clean != null && !clean.has("pwd") && clean.optString("cmd") == "GetDevInfo") { "redact" }
+        check(sanitize("GetDevInfo", JSONObject()).length() == 0) { "empty command" }
+        check(sanitize("SetLed", JSONObject().put("ledstatus", 1)).optInt("ledstatus") == 1) { "led" }
+        var rejected = false
+        try {
+            sanitize("reboot", JSONObject())
+        } catch (_: IllegalArgumentException) {
+            rejected = true
+        }
+        check(rejected) { "reboot rejected" }
+        rejected = false
+        try {
+            sanitize("SetLed", JSONObject().put("ledstatus", 9))
+        } catch (_: IllegalArgumentException) {
+            rejected = true
+        }
+        check(rejected) { "bad led rejected" }
     }
 
     private fun ByteArray.indexOf(value: Int): Int {

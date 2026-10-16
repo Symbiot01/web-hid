@@ -2,7 +2,7 @@
 
 This app runs on the Android phone that is the camera's Wi-Fi hotspot. The camera stays on the phone hotspot. The phone reaches the operator console over mobile data or an upstream Wi-Fi connection.
 
-The screen shows only start, stop, and four status lines. Failure detail is written to a private log, not to the main screen.
+The screen shows connection status, video control, and the same camera commands the console can send. Failure detail is written to a private log. Command replies are shown on the phone with passwords removed.
 
 ## Daily use
 
@@ -10,9 +10,11 @@ The screen shows only start, stop, and four status lines. Failure detail is writ
 2. Open LookCam Bridge.
 3. Open Connection settings once and enter the console URL, bridge token, and camera id (`GHBB-522328-BWDTT`). Leave camera IP empty unless you want to pin one.
 4. Tap **Keep running in background** and allow it.
-5. Tap **Start bridge**. The notification stays up while the phone is locked.
+5. Tap **Start bridge**. The notification stays up while the phone is locked. From the notification you can pause video, reconnect, or stop.
 
-Stop and start again after changing the token or camera id.
+**Pause video** stops the camera stream and the upload even if the console still wants video. **Follow console** hands that choice back. **Stop bridge** pauses video and releases the wake lock.
+
+Camera commands (info, flip, LED, picture, alarm, Wi-Fi, password) run from the phone as well as the console. Wi-Fi join and password change ask for confirmation. Stop and start again after changing the token or camera id.
 
 ## What the phone does
 

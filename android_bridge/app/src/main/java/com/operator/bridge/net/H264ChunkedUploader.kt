@@ -40,6 +40,7 @@ class H264ChunkedUploader(
     fun halt() {
         stop.set(true)
         connected = false
+        box.clear()
     }
 
     private fun runLoop() {

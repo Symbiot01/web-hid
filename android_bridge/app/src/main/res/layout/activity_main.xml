@@ -9,7 +9,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="20dp">
+        android:padding="16dp">
 
         <TextView
             android:layout_width="wrap_content"
@@ -23,7 +23,7 @@
             android:id="@+id/statusDetail"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
+            android:layout_marginTop="4dp"
             android:text="Stopped"
             android:textColor="@color/muted"
             android:textSize="14sp" />
@@ -48,28 +48,30 @@
             android:id="@+id/counters"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="10dp"
             android:textColor="@color/muted"
             android:textSize="13sp" />
 
         <Button
             android:id="@+id/startButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            style="@style/PrimaryButton"
             android:text="@string/start" />
 
-        <Button
-            android:id="@+id/reconnectButton"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/reconnect" />
+            android:orientation="horizontal">
 
-        <Button
-            android:id="@+id/settingsButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/settings" />
+            <Button
+                android:id="@+id/reconnectButton"
+                style="@style/RowButton"
+                android:text="@string/reconnect" />
+
+            <Button
+                android:id="@+id/settingsButton"
+                style="@style/RowButton"
+                android:text="@string/settings" />
+        </LinearLayout>
 
         <LinearLayout
             android:id="@+id/settingsPanel"
@@ -80,58 +82,450 @@
 
             <EditText
                 android:id="@+id/urlInput"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                style="@style/Field"
                 android:hint="Console URL"
-                android:inputType="textUri"
-                android:textColor="@color/ink"
-                android:textColorHint="@color/muted" />
+                android:inputType="textUri" />
 
             <EditText
                 android:id="@+id/tokenInput"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                style="@style/Field"
                 android:hint="Bridge token"
-                android:inputType="textPassword"
-                android:textColor="@color/ink"
-                android:textColorHint="@color/muted" />
+                android:inputType="textPassword" />
 
             <EditText
                 android:id="@+id/deviceInput"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                style="@style/Field"
                 android:hint="Camera id"
-                android:inputType="text"
-                android:textColor="@color/ink"
-                android:textColorHint="@color/muted" />
+                android:inputType="text" />
 
             <EditText
                 android:id="@+id/ipInput"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                style="@style/Field"
                 android:hint="Optional camera IP"
-                android:inputType="text"
-                android:textColor="@color/ink"
-                android:textColorHint="@color/muted" />
+                android:inputType="text" />
 
             <CheckBox
                 android:id="@+id/autoStart"
+                style="@style/BitCheck"
+                android:text="Start again after reboot" />
+        </LinearLayout>
+
+        <TextView
+            style="@style/SectionLabel"
+            android:text="Video" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Pause stops the camera stream and the upload. Stop bridge also releases the wake lock."
+            android:textColor="@color/muted"
+            android:textSize="13sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/followButton"
+                style="@style/RowButton"
+                android:text="Follow console" />
+
+            <Button
+                android:id="@+id/holdOnButton"
+                style="@style/RowButton"
+                android:text="Keep on" />
+
+            <Button
+                android:id="@+id/holdOffButton"
+                style="@style/RowButton"
+                android:text="@string/pause_video" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/streamFollowButton"
+                style="@style/RowButton"
+                android:text="Stream follows" />
+
+            <Button
+                android:id="@+id/stream2Button"
+                style="@style/RowButton"
+                android:text="Stream 2" />
+
+            <Button
+                android:id="@+id/stream3Button"
+                style="@style/RowButton"
+                android:text="Stream 3" />
+        </LinearLayout>
+
+        <TextView
+            style="@style/SectionLabel"
+            android:text="Camera" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/cmdDevice"
+                style="@style/RowButton"
+                android:text="Device info" />
+
+            <Button
+                android:id="@+id/cmdStream"
+                style="@style/RowButton"
+                android:text="Stream info" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/cmdVideoInfo"
+                style="@style/RowButton"
+                android:text="Picture info" />
+
+            <Button
+                android:id="@+id/cmdAlarmInfo"
+                style="@style/RowButton"
+                android:text="Alarm info" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/cmdLedInfo"
+                style="@style/RowButton"
+                android:text="LED schedule" />
+
+            <Button
+                android:id="@+id/cmdScan"
+                style="@style/RowButton"
+                android:text="Scan Wi-Fi" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/cmdFlipH"
+                style="@style/RowButton"
+                android:text="Flip horizontal" />
+
+            <Button
+                android:id="@+id/cmdFlipV"
+                style="@style/RowButton"
+                android:text="Flip vertical" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/cmdLedOn"
+                style="@style/RowButton"
+                android:text="LED on" />
+
+            <Button
+                android:id="@+id/cmdLedOff"
+                style="@style/RowButton"
+                android:text="LED off" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/resultText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@color/card"
+            android:fontFamily="monospace"
+            android:maxLines="14"
+            android:padding="12dp"
+            android:scrollbars="vertical"
+            android:text="Command results show up here."
+            android:textColor="@color/ink"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/moreButton"
+            style="@style/RowButton"
+            android:layout_width="match_parent"
+            android:layout_weight="0"
+            android:layout_marginTop="8dp"
+            android:text="@string/more_controls" />
+
+        <LinearLayout
+            android:id="@+id/morePanel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                style="@style/SectionLabel"
+                android:text="Picture" />
+
+            <TextView
+                android:id="@+id/brightnessLabel"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Start again after reboot"
+                android:text="Brightness 30"
                 android:textColor="@color/ink" />
+
+            <SeekBar
+                android:id="@+id/brightness"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:max="100"
+                android:progress="30"
+                android:progressTint="@color/ok"
+                android:thumbTint="@color/ok" />
+
+            <TextView
+                android:id="@+id/saturationLabel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Saturation 30"
+                android:textColor="@color/ink" />
+
+            <SeekBar
+                android:id="@+id/saturation"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:max="100"
+                android:progress="30"
+                android:progressTint="@color/ok"
+                android:thumbTint="@color/ok" />
+
+            <Button
+                android:id="@+id/applyPicture"
+                style="@style/RowButton"
+                android:layout_width="match_parent"
+                android:layout_weight="0"
+                android:text="Apply picture" />
+
+            <TextView
+                style="@style/SectionLabel"
+                android:text="Alarm" />
+
+            <EditText
+                android:id="@+id/alarmSensitivity"
+                style="@style/Field"
+                android:hint="Sensitivity 0–10"
+                android:inputType="number"
+                android:text="0" />
+
+            <EditText
+                android:id="@+id/alarmGop"
+                style="@style/Field"
+                android:hint="GOP 1–120"
+                android:inputType="number"
+                android:text="30" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <CheckBox
+                    android:id="@+id/alarmAudio"
+                    style="@style/BitCheck"
+                    android:text="Audio" />
+
+                <CheckBox
+                    android:id="@+id/alarmPush"
+                    style="@style/BitCheck"
+                    android:text="Push" />
+
+                <CheckBox
+                    android:id="@+id/alarmOsd"
+                    style="@style/BitCheck"
+                    android:checked="true"
+                    android:text="OSD" />
+
+                <CheckBox
+                    android:id="@+id/alarmFlag"
+                    style="@style/BitCheck"
+                    android:checked="true"
+                    android:text="Flag" />
+            </LinearLayout>
+
+            <EditText
+                android:id="@+id/alarmStart"
+                style="@style/Field"
+                android:hint="Start HH:MM"
+                android:maxLength="5"
+                android:text="00:00" />
+
+            <EditText
+                android:id="@+id/alarmEnd"
+                style="@style/Field"
+                android:hint="End HH:MM"
+                android:maxLength="5"
+                android:text="15:00" />
+
+            <EditText
+                android:id="@+id/alarmTwo"
+                style="@style/Field"
+                android:hint="Second start HH:MM"
+                android:maxLength="5"
+                android:text="00:00" />
+
+            <EditText
+                android:id="@+id/alarmTwoEnd"
+                style="@style/Field"
+                android:hint="Second end HH:MM"
+                android:maxLength="5"
+                android:text="00:00" />
+
+            <Button
+                android:id="@+id/saveAlarm"
+                style="@style/RowButton"
+                android:layout_width="match_parent"
+                android:layout_weight="0"
+                android:text="Save alarm" />
+
+            <TextView
+                style="@style/SectionLabel"
+                android:text="LED schedule" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <CheckBox
+                    android:id="@+id/ledControl"
+                    style="@style/BitCheck"
+                    android:text="Control" />
+
+                <CheckBox
+                    android:id="@+id/ledFlag"
+                    style="@style/BitCheck"
+                    android:checked="true"
+                    android:text="Flag" />
+            </LinearLayout>
+
+            <EditText
+                android:id="@+id/ledStart"
+                style="@style/Field"
+                android:hint="Start HH:MM"
+                android:maxLength="5"
+                android:text="01:00" />
+
+            <EditText
+                android:id="@+id/ledEnd"
+                style="@style/Field"
+                android:hint="End HH:MM"
+                android:maxLength="5"
+                android:text="11:00" />
+
+            <EditText
+                android:id="@+id/ledTwo"
+                style="@style/Field"
+                android:hint="Second start HH:MM"
+                android:maxLength="5"
+                android:text="00:00" />
+
+            <EditText
+                android:id="@+id/ledTwoEnd"
+                style="@style/Field"
+                android:hint="Second end HH:MM"
+                android:maxLength="5"
+                android:text="00:00" />
+
+            <Button
+                android:id="@+id/saveLed"
+                style="@style/RowButton"
+                android:layout_width="match_parent"
+                android:layout_weight="0"
+                android:text="Save LED schedule" />
+
+            <TextView
+                style="@style/SectionLabel"
+                android:text="Wi-Fi" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Joining a network takes the camera off this hotspot."
+                android:textColor="@color/warn"
+                android:textSize="13sp" />
+
+            <LinearLayout
+                android:id="@+id/wifiList"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+            <EditText
+                android:id="@+id/wifiSsid"
+                style="@style/Field"
+                android:hint="Network name"
+                android:inputType="text"
+                android:maxLength="32" />
+
+            <EditText
+                android:id="@+id/wifiPassword"
+                style="@style/Field"
+                android:hint="Network password"
+                android:inputType="textPassword"
+                android:maxLength="64" />
+
+            <Button
+                android:id="@+id/joinWifi"
+                style="@style/RowButton"
+                android:layout_width="match_parent"
+                android:layout_weight="0"
+                android:text="Join network" />
+
+            <TextView
+                style="@style/SectionLabel"
+                android:text="Camera password" />
+
+            <EditText
+                android:id="@+id/newPassword"
+                style="@style/Field"
+                android:hint="New camera password"
+                android:inputType="textPassword"
+                android:maxLength="64" />
+
+            <Button
+                android:id="@+id/changePassword"
+                style="@style/RowButton"
+                android:layout_width="match_parent"
+                android:layout_weight="0"
+                android:text="Change password" />
         </LinearLayout>
 
         <Button
             android:id="@+id/backgroundButton"
+            style="@style/RowButton"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_weight="0"
+            android:layout_marginTop="16dp"
             android:text="@string/allow_background" />
 
         <Button
             android:id="@+id/exportButton"
+            style="@style/RowButton"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_weight="0"
             android:text="@string/export_debug" />
     </LinearLayout>
 </ScrollView>
