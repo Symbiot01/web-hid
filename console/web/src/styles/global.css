@@ -1189,6 +1189,51 @@ textarea:focus-visible {
   flex-shrink: 0;
 }
 
+.ide-think {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.ide-think summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  user-select: none;
+}
+
+.ide-think summary::-webkit-details-marker {
+  display: none;
+}
+
+.ide-think summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--muted);
+}
+
+.ide-think[open] summary::before {
+  content: '▾';
+}
+
+.ide-think-body {
+  margin: 0;
+  max-height: 7.5rem;
+  overflow: auto;
+  padding: 0 8px 8px 22px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 @keyframes ide-spin {
   to {
     transform: rotate(360deg);

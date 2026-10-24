@@ -96,6 +96,12 @@ test('parses model JSON and checks image bytes', () => {
     ),
     true,
   );
+  assert.equal(
+    cleanSource(
+      '#include <bits/stdc++.h>\nusing namespace std;\n\nvoid solve() {\n  long long n, m;\n  if (!(cin >> n >> m)) return;\n  vector<long long> weights;\n  weights.reserve(m);\n}\n\nint main() {\n  ios_base::sync_with_stdio(false);\n  cin.tie(nullptr);\n  long long t = 1;\n  while (t--) {\n    solve();\n  }\n  return 0;\n}\n',
+    ),
+    '#include <bits/stdc++.h>\nusing namespace std;\n\nvoid solve() {\n  long long n, m;\n  cin >> n >> m;\n  vector<long long> weights;\n}\n\nint main() {\n  long long t = 1;\n  while (t--) {\n    solve();\n  }\n  return 0;\n}\n',
+  );
 });
 
 test('retries on RECITATION finishReason with anti-recitation prompt', async () => {
@@ -147,6 +153,49 @@ test('retries on RECITATION finishReason with anti-recitation prompt', async () 
   assert.equal(out.title, 'LRU Cache');
   assert.equal(bodies.length, 2);
   assert.match(bodies[1].contents[0].parts[0].text, /Paraphrase/);
+  assert.equal(bodies[0].generationConfig.thinkingConfig.includeThoughts, true);
+  assert.equal(bodies[0].generationConfig.thinkingConfig.thinkingLevel, 'HIGH');
+});
+
+test('streams thought tokens and redacts the key', async () => {
+  const thoughts = [];
+  const gen = createGemini({
+    apiKey: KEY,
+    model: MODEL,
+    onThought: (text, meta) => {
+      if (meta && meta.reset) {
+        thoughts.push(`RESET:${meta.label}`);
+        return;
+      }
+      thoughts.push(text);
+    },
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      body: {
+        getReader() {
+          const chunks = [
+            `data: {"candidates":[{"content":{"parts":[{"text":"use a map ${KEY}","thought":true}]}}]}\n\n`,
+            'data: {"candidates":[{"content":{"parts":[{"text":" then a list","thought":true}]}}]}\n\n',
+            'data: {"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"{\\"ok\\":true,\\"reason\\":\\"fine\\"}"}]}}]}\n\n',
+          ];
+          let index = 0;
+          return {
+            async read() {
+              if (index >= chunks.length) return { done: true, value: undefined };
+              const value = Buffer.from(chunks[index], 'utf8');
+              index += 1;
+              return { done: false, value };
+            },
+          };
+        },
+      },
+    }),
+  });
+  const out = await gen('review', { statement: 'check', cases: [] });
+  assert.equal(out.ok, true);
+  assert.equal(out.reason, 'fine');
+  assert.deepEqual(thoughts, ['RESET:checking cases', 'use a map [redacted]', ' then a list']);
 });
 
 test('solved run writes the source and does not reveal the key', async () => {

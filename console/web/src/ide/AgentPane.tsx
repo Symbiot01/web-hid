@@ -26,6 +26,8 @@ type Props = {
   entry?: string;
   signature?: string;
   activity?: string;
+  thinking?: string;
+  thinkingLabel?: string;
   cases: TestCase[];
   configured: boolean;
   messages: AgentMessage[];
@@ -125,6 +127,8 @@ export function AgentPane({
   entry = 'solve',
   signature = '',
   activity = '',
+  thinking = '',
+  thinkingLabel = '',
   cases,
   configured,
   messages,
@@ -138,10 +142,13 @@ export function AgentPane({
   const [images, setImages] = useState<ImageItem[]>([]);
   const [imageNotice, setImageNotice] = useState('');
   const [dragging, setDragging] = useState(false);
+  const [thinkOpen, setThinkOpen] = useState(true);
   const dragDepth = useRef(0);
   const imgCounter = useRef(0);
   const fileRef = useRef<HTMLInputElement>(null);
   const feedRef = useRef<HTMLOListElement>(null);
+  const thinkRef = useRef<HTMLPreElement>(null);
+  const thinkClosed = useRef(false);
   const working = phase === 'working';
 
   const phaseLabel: Record<AgentPhase, string> = {
@@ -167,6 +174,17 @@ export function AgentPane({
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   }, [messages.length, phase]);
+
+  useEffect(() => {
+    if (!thinking) return;
+    if (!thinkClosed.current) setThinkOpen(true);
+    const el = thinkRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [thinking]);
+
+  useEffect(() => {
+    if (!working) thinkClosed.current = false;
+  }, [working]);
 
   useEffect(() => {
     if (!incomingFiles || incomingFiles.length === 0) return;
@@ -396,6 +414,25 @@ export function AgentPane({
               <span className="ide-agent-spinner" aria-hidden="true" />
               <span>{activity || stageDetail[step] || 'Working…'}</span>
             </div>
+          ) : null}
+          {thinking ? (
+            <details
+              className="ide-think"
+              open={thinkOpen}
+              onToggle={(event) => {
+                const next = event.currentTarget.open;
+                setThinkOpen(next);
+                thinkClosed.current = working && !next;
+              }}
+            >
+              <summary>
+                {working ? 'Thinking' : 'Thoughts'}
+                {thinkingLabel ? ` · ${thinkingLabel}` : ''}
+              </summary>
+              <pre ref={thinkRef} className="ide-think-body">
+                {thinking}
+              </pre>
+            </details>
           ) : null}
         </div>
       ) : null}

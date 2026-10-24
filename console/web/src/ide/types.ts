@@ -59,6 +59,8 @@ export type AgentView = {
   }>;
   output: string;
   activity?: string;
+  thinking?: string;
+  thinkingLabel?: string;
   running?: boolean;
 };
 
@@ -69,9 +71,10 @@ void solve() {
 }
 
 int main() {
-  ios_base::sync_with_stdio(false);
-  cin.tie(nullptr);
-  solve();
+  long long t = 1;
+  while (t--) {
+    solve();
+  }
   return 0;
 }
 `;

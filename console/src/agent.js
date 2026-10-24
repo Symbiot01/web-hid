@@ -9,6 +9,18 @@ const SOURCE_LIMIT = 64 * 1024;
 const IMAGE_MAX = 4 * 1024 * 1024;
 const MAX_IMAGES = 6;
 const OUTPUT_LIMIT = 12_000;
+const THINKING_LIMIT = 6_000;
+
+const THINK_LABELS = {
+  identify: 'reading the problem',
+  review: 'checking cases',
+  makeCases: 'writing cases',
+  harness: 'writing the wrapper',
+  solve: 'solving',
+  retry: 'trying another approach',
+  fix: 'repairing the code',
+  ask: 'answering',
+};
 
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
@@ -208,13 +220,20 @@ function cleanSource(source) {
     const unescaped = normalized.replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t');
     return cleanSource(unescaped);
   }
-  const lines = normalized.split('\n');
+  const withoutBoilerplate = normalized
+    .replace(/[ \t]*(?:std::)?ios(?:_base)?::sync_with_stdio\s*\([^;]*\)\s*;[ \t]*\n?/g, '')
+    .replace(/[ \t]*(?:std::)?c(?:in|out)\.tie\s*\([^;]*\)\s*;[ \t]*\n?/g, '')
+    .replace(/^[ \t]*[A-Za-z_][A-Za-z0-9_]*\.reserve\s*\([^;]*\)\s*;[ \t]*\n?/gm, '')
+    .replace(/\bif\s*\(\s*!\s*\(\s*(cin\s*>>[^;()]+?)\s*\)\s*\)\s*return(?:\s+0)?\s*;/g, '$1;')
+    .trim();
+  if (!withoutBoilerplate) return '';
+  const lines = withoutBoilerplate.split('\n');
   const suspicious = lines.some(
     (line) =>
       (line.match(/\{/g) || []).length >= 2 ||
       (line.length > 100 && line.includes(';') && line.includes('{')),
   );
-  if (!suspicious) return `${normalized}\n`;
+  if (!suspicious) return `${withoutBoilerplate}\n`;
 
   let out = '';
   let indent = 0;
@@ -223,9 +242,9 @@ function cleanSource(source) {
   let inBlockComment = false;
   let parenDepth = 0;
 
-  for (let i = 0; i < normalized.length; i += 1) {
-    const ch = normalized[i];
-    const next = normalized[i + 1];
+  for (let i = 0; i < withoutBoilerplate.length; i += 1) {
+    const ch = withoutBoilerplate[i];
+    const next = withoutBoilerplate[i + 1];
     if (inLineComment) {
       out += ch;
       if (ch === '\n') {
@@ -245,8 +264,8 @@ function cleanSource(source) {
     }
     if (inString) {
       out += ch;
-      if (ch === '\\' && i + 1 < normalized.length) {
-        out += normalized[i + 1];
+      if (ch === '\\' && i + 1 < withoutBoilerplate.length) {
+        out += withoutBoilerplate[i + 1];
         i += 1;
       } else if (ch === inString) {
         inString = null;
@@ -278,8 +297,8 @@ function cleanSource(source) {
       if (!out.endsWith('\n') && !out.endsWith(' ')) out += ' ';
       out += '{\n';
       indent += 1;
-      while (normalized[i + 1] === ' ' || normalized[i + 1] === '\t') i += 1;
-      if (normalized[i + 1] === '\n') i += 1;
+      while (withoutBoilerplate[i + 1] === ' ' || withoutBoilerplate[i + 1] === '\t') i += 1;
+      if (withoutBoilerplate[i + 1] === '\n') i += 1;
       out += '  '.repeat(Math.max(0, indent));
       continue;
     }
@@ -288,21 +307,21 @@ function cleanSource(source) {
       out = out.replace(/[ \t]+$/, '');
       if (!out.endsWith('\n')) out += '\n';
       out += `${'  '.repeat(indent)}}`;
-      if (normalized[i + 1] === ';') {
+      if (withoutBoilerplate[i + 1] === ';') {
         out += ';';
         i += 1;
       }
       out += '\n';
-      while (normalized[i + 1] === ' ' || normalized[i + 1] === '\t') i += 1;
-      if (normalized[i + 1] === '\n') i += 1;
+      while (withoutBoilerplate[i + 1] === ' ' || withoutBoilerplate[i + 1] === '\t') i += 1;
+      if (withoutBoilerplate[i + 1] === '\n') i += 1;
       out += '  '.repeat(Math.max(0, indent));
       continue;
     }
     if (ch === ';' && parenDepth === 0) {
       out += ';';
       let look = i + 1;
-      while (normalized[look] === ' ' || normalized[look] === '\t') look += 1;
-      if (normalized[look] && normalized[look] !== '\n' && normalized[look] !== '}' && normalized[look] !== '/') {
+      while (withoutBoilerplate[look] === ' ' || withoutBoilerplate[look] === '\t') look += 1;
+      if (withoutBoilerplate[look] && withoutBoilerplate[look] !== '\n' && withoutBoilerplate[look] !== '}' && withoutBoilerplate[look] !== '/') {
         out += `\n${'  '.repeat(Math.max(0, indent))}`;
         i = look - 1;
       }
@@ -311,8 +330,8 @@ function cleanSource(source) {
     if (ch === '\n') {
       out = out.replace(/[ \t]+$/, '');
       out += '\n';
-      while (normalized[i + 1] === ' ' || normalized[i + 1] === '\t') i += 1;
-      const upcomingClose = normalized[i + 1] === '}';
+      while (withoutBoilerplate[i + 1] === ' ' || withoutBoilerplate[i + 1] === '\t') i += 1;
+      const upcomingClose = withoutBoilerplate[i + 1] === '}';
       out += '  '.repeat(Math.max(0, upcomingClose ? indent - 1 : indent));
       continue;
     }
@@ -320,8 +339,8 @@ function cleanSource(source) {
       out = out.replace(/[ \t]+$/, '');
       out += '\n';
       i += 1;
-      while (normalized[i + 1] === ' ' || normalized[i + 1] === '\t') i += 1;
-      const upcomingClose = normalized[i + 1] === '}';
+      while (withoutBoilerplate[i + 1] === ' ' || withoutBoilerplate[i + 1] === '\t') i += 1;
+      const upcomingClose = withoutBoilerplate[i + 1] === '}';
       out += '  '.repeat(Math.max(0, upcomingClose ? indent - 1 : indent));
       continue;
     }
@@ -571,8 +590,8 @@ function promptFor(task, context) {
         '  * Query / Class-Design Problems (e.g. `["LRUCache", "put", "get"]` with `[[2], [1, 1], [1]]`, or `RandomizedCollection`, `Trie`, `MinStack`): Convert the parallel command/argument arrays into bare-bones query lines: Line 1 is constructor argument(s) (if any) and operation count `q` (or `q` on Line 1 if no constructor args), followed by `q` lines of `op arg1 arg2...`. Omit `null` constructor/void outputs in `expected` and include only non-void query return values separated by spaces or newlines (and state that exact convention in `format`).',
         '  * Expected Outputs: Strip outer `[` `]`, quotes, and commas into bare space- or newline-separated tokens (e.g. `[0, 1]` -> `"0 1\\n"`).',
         '- Template vs. Standard Competitive Programming rule:',
-        '  1. IF a starter template / function or class signature is given in the problem or screenshot (e.g. LeetCode/HackerRank `class Solution` with `findMedianSortedArrays`, or an OOP design class like `class LRUCache`): conform strictly to that template — set `functionName` to that exact method or class name and `signature` to its clean C++17 signature only (e.g. `"int trap(vector<int>& height)"` or `"class LRUCache { public: LRUCache(int capacity); int get(int key); void put(int key, int value); };"`).',
-        '  2. OTHERWISE (standard stdin/stdout competitive programming like Codeforces, AtCoder, CSES, ICPC, or no template given): ALWAYS set `functionName` to `"solve"` and `signature` to `"void solve()"` (never `void solve(istream&, ostream&)`). In Codeforces style, `void solve()` reads directly from `cin` and writes directly to `cout`.',
+        '  1. IF a starter template function or class signature is given in the problem or screenshot (other than a bare `int main()` skeleton — e.g. LeetCode/HackerRank `class Solution` with `findMedianSortedArrays`, a standalone function like `int trap(vector<int>& height)`, or an OOP design class like `class LRUCache`): conform strictly to that template — set `functionName` to that exact method, function, or class name and `signature` to its clean C++17 signature only.',
+        '  2. OTHERWISE (standard stdin/stdout competitive programming like Codeforces, AtCoder, CSES, ICPC, no template given, or only a bare `int main() { ... }` starter skeleton is given): ALWAYS set `functionName` to `"solve"` and `signature` to `"void solve()"` (never `void solve(istream&, ostream&)`). `void solve()` handles one test case reading directly from `cin` and writing directly to `cout`, while `main()` loops over test cases.',
         '- format: precise description of the bare-bones stdin token order and bare-bones stdout format used in `cases`.',
         '- plan: 1-2 sentences stating the optimal algorithm and its time and space complexity.',
       ].join('\n'),
@@ -610,18 +629,19 @@ function promptFor(task, context) {
   if (task === 'harness') {
     return {
       system: [
-        'Write a clean, minimal C++17 test harness (`int main()`) and a compilable stub for the target function or class.',
+        'Write a clean, minimal, human-style C++17 test harness (`int main()`) and a compilable stub for the target function or class.',
         'Reply with JSON only: {"source":""}.',
         'Header & style rules (mandatory):',
         '- ALWAYS start with `#include <bits/stdc++.h>` and `using namespace std;` instead of listing multiple individual standard library headers.',
+        '- NEVER write `ios_base::sync_with_stdio(false);` or `cin.tie(nullptr);`.',
         '- Write the simplest, cleanest C++17 code possible with 2-space indentation.',
         'Structure rules:',
         `- Mode A — Standard Competitive Programming (\`${entry}\` is \`solve\` and signature is \`void solve()\`):`,
-        '  * Write `void solve() {}` above `main()` (it takes NO parameters — never `istream&` or `ostream&` — and will use `cin` and `cout` directly).',
-        '  * Keep `main()` minimal in classic Codeforces style (`ios_base::sync_with_stdio(false); cin.tie(nullptr);`, and either call `solve();` directly or `int t; if (cin >> t) while (t--) solve();` depending on whether the problem has multiple test cases per input).',
+        '  * Write `void solve() {}` above `main()` (it takes NO parameters — never `istream&` or `ostream&` — and solves a single test case using `cin` and `cout` directly).',
+        '  * In `main()`, handle the test-case loop: if the input starts with the number of test cases `t`, write `long long t; cin >> t; while (t--) solve();`; if there is only 1 test case per input, write `long long t = 1; while (t--) solve();`. Never nest a test-case loop inside `solve()`.',
         `- Mode B — Template Function or Class Given (\`${signature}\` has parameters/return value or is a class like \`${entry}\`):`,
-        `  * Include any required structs (\`ListNode\`, \`TreeNode\` if used in \`${signature}\`) and the function/class \`${signature}\` with minimal placeholder returns so it compiles.`,
-        `  * Test cases are in bare-bones competitive programming stdin format (e.g. \`5\\n1 2 3 4 5\\n\` for arrays, or \`q\` lines of \`op args...\` for query/class problems). In \`main()\`, read inputs directly using clean \`cin >>\` loops, call \`${entry}\` (or instantiate \`${entry}\` and dispatch queries), and print the bare result to \`cout\` matching Cases.`,
+        `  * Include any required structs (\`ListNode\`, \`TreeNode\` if used in \`${signature}\`) and the exact function/class \`${signature}\` with minimal placeholder returns so it compiles.`,
+        `  * Test cases are in bare-bones competitive programming stdin format (e.g. \`5\\n1 2 3 4 5\\n\` for arrays, or \`q\` lines of \`op args...\` for query/class problems). In \`main()\`, read inputs directly using simple \`cin >>\` statements (without \`if (!(cin >> ...))\` guards), call \`${entry}\` (or instantiate \`${entry}\` and dispatch queries), and print the bare result to \`cout\` matching Cases.`,
       ].join('\n'),
       user: `Statement:\n${statement}\n\nTarget function:\n${entry}\n\nSignature:\n${signature}\n\nSample format:\n${format}\n\nCases:\n${cases}`,
     };
@@ -629,20 +649,24 @@ function promptFor(task, context) {
   if (task === 'solve' || task === 'retry') {
     return {
       system: [
-        'Write the simplest, cleanest, optimal C++17 solution program.',
+        'Write the simplest, cleanest, optimal, natural human-style C++17 solution program.',
         'Reply with JSON only: {"source":"","approach":""}.',
         'Code style & structure rules (mandatory):',
-        '1. Header: ALWAYS use `#include <bits/stdc++.h>` and `using namespace std;` at the top instead of listing individual standard headers (`<iostream>`, `<vector>`, `<algorithm>`, etc.).',
-        '2. Template conformance vs. `void solve()`:',
-        `   - If a specific function or class template was given (\`${signature}\`): conform to that signature, put the algorithm inside \`${entry}\`, and keep \`main()\` at the bottom strictly as the test wrapper that parses bare-bones \`cin\`, calls/dispatches \`${entry}\`, and prints to \`cout\`.`,
-        '   - Otherwise (standard competitive programming / Codeforces style): use `void solve()` with NO parameters (never `istream& in, ostream& out`). Read input directly from `cin` and print output directly to `cout` inside `solve()` (or per-testcase inside `solve()` with `int t; cin >> t; while (t--) solve();` in `main()`).',
-        '3. Keep the code as simple, direct, and readable as possible — avoid over-engineering, unnecessary boilerplate, or stream-passing abstractions.',
+        '1. Header & No Fast-I/O Boilerplate: ALWAYS use `#include <bits/stdc++.h>` and `using namespace std;` at the top. NEVER add `ios_base::sync_with_stdio(false);` or `cin.tie(nullptr);`.',
+        '2. Template conformance vs. `void solve()` and test-case loop:',
+        `   - If a specific function or class template was given (\`${signature}\` other than \`void solve()\`): conform strictly to that signature, put the algorithm inside \`${entry}\` (plus any top-level helper functions above it), and keep \`main()\` at the bottom strictly as the test wrapper that reads bare-bones \`cin\`, calls/dispatches \`${entry}\`, and prints to \`cout\`.`,
+        '   - Otherwise (`void solve()`): `void solve()` solves ONE test case (reading that test case\'s inputs directly from `cin` and printing its output to `cout`). `main()` handles the test-case loop: use `long long t; cin >> t; while (t--) solve();` when the input begins with testcase count `t`, or `long long t = 1; while (t--) solve();` when there is only 1 test case per input. NEVER put the testcase loop inside `solve()` or create a `main() -> solve() -> solve_case()` chain.',
+        '3. Natural Human C++ Conventions (strictly avoid AI tells):',
+        '   - Top-level helper functions, NEVER local lambdas: NEVER write local lambdas inside `solve()` or the target function (especially never `auto fn = [&](...) -> bool { ... };` with trailing return types). Whenever a helper function (e.g. `check`, `can_reach`, `dfs`, `bfs`) is needed, write it as a normal top-level function above `solve()` / `' + entry + '`.',
+        '   - Use `long long` everywhere: Use `long long` instead of `int` for all integer variables, loop counters, array sizes, capacities, weights, distances, helper function parameters/returns, and containers (`vector<long long>`, `pair<long long, long long>`), EXCEPT `int main()` and any fixed `int` types required by a given starter template signature.',
+        '   - No `(int)` casts on `.size()`: NEVER write C-style casts like `(int)vec.size()`. Store sizes and bounds directly in `long long` variables (e.g. `long long high = weights.size() - 1;`).',
+        '   - Direct `cin >>` reads: NEVER wrap initial input reads in `if (!(cin >> n >> m)) return;`. Simply declare variables and read with `cin >> n >> m;`.',
+        '   - No `.reserve()`: NEVER call `.reserve(...)` on vectors.',
         '4. Cases use bare-bones whitespace-separated stdin (e.g. array size `n` followed by `n` space-separated elements `5\\n1 2 3 4 5\\n`, or constructor args + `q` lines of `op arg...` for query/class problems). Read inputs with simple `cin >>` in `main()` (for template functions/classes) or `solve()`, and print bare space/newline-separated output matching the exact `expected` strings in Cases. For strings that may be empty (`""`), use `getline(cin, s)` carefully so empty input does not fail `cin >> s`.',
-        '5. Handle algorithmic edge cases: `long long` for 64-bit sums/products/distances, 1-based vs 0-based indexing, empty/single-element inputs, duplicates, and boundary constraints.',
-        '6. Match the exact expected output format (`fixed << setprecision(...)`, `true`/`false`, `YES`/`NO`, or space/newline-separated answers).',
-        '7. Format across multiple lines with 2-space indentation. Do not open files, spawn processes, or use the network. `approach` is 1-2 concise sentences stating the algorithm and time/space complexity.',
-        '8. If `Previous result` shows failed test cases (`status: "wrong"` or `"tle"` or `"error"`), carefully inspect EVERY failed test case (`input`, `expected`, and `actual` output) to diagnose which missing edge case, boundary condition, integer overflow, or off-by-one bug caused the mismatch before writing the new solution.',
-        '9. STRICT ANTI-CHEAT / NO HARDCODING RULE: NEVER hardcode specific test case inputs or expected outputs (e.g., NEVER write `if (n == 5 && data == "zzzzz") return ...;` or check for specific sample values). Every output must be computed purely by a general mathematical/algorithmic solution that works for all valid inputs up to the problem constraints.',
+        '5. Match the exact expected output format (`fixed << setprecision(...)`, `true`/`false`, `YES`/`NO`, or space/newline-separated answers).',
+        '6. Format across multiple lines with 2-space indentation. Do not open files, spawn processes, or use the network. `approach` is 1-2 concise sentences stating the algorithm and time/space complexity.',
+        '7. If `Previous result` shows failed test cases (`status: "wrong"` or `"tle"` or `"error"`), carefully inspect EVERY failed test case (`input`, `expected`, and `actual` output) to diagnose which missing edge case, boundary condition, integer overflow, or off-by-one bug caused the mismatch before writing the new solution.',
+        '8. STRICT ANTI-CHEAT / NO HARDCODING RULE: NEVER hardcode specific test case inputs or expected outputs (e.g., NEVER write `if (n == 5 && data == "zzzzz") return ...;` or check for specific sample values). Every output must be computed purely by a general mathematical/algorithmic solution that works for all valid inputs up to the problem constraints.',
       ].join('\n'),
       user: `Statement:\n${statement}\n\nFunction:\n${entry}\n\nSignature:\n${signature}\n\nSample format:\n${format}\n\nCases:\n${cases}\n\nApproach:\n${hint || 'Use the simplest optimal algorithm that handles all constraints and edge cases.'}\n\nPrevious source:\n${source}\n\nPrevious result:\n${failure}`,
     };
@@ -650,11 +674,11 @@ function promptFor(task, context) {
   if (task === 'fix') {
     return {
       system: [
-        'Repair the C++17 program so it compiles cleanly and remains simple and readable.',
+        'Repair the C++17 program so it compiles cleanly and remains simple, natural, and readable.',
         'Reply with JSON only: {"source":""}.',
-        '- Prefer `#include <bits/stdc++.h>` and `using namespace std;` at the top.',
-        `- Keep all algorithm logic inside \`${entry}\` above \`main()\`. If \`${entry}\` is \`solve\`, use \`void solve()\` reading from \`cin\` and writing to \`cout\` directly.`,
-        `- Keep \`main()\` minimal at the bottom calling \`${entry}\`.`,
+        '- Prefer `#include <bits/stdc++.h>` and `using namespace std;` at the top. Never add `ios_base::sync_with_stdio(false);` or `cin.tie(nullptr);`.',
+        `- Keep all algorithm logic inside \`${entry}\` (and any top-level helper functions above it) above \`main()\`. If \`${entry}\` is \`solve\`, use \`void solve()\` for a single test case and keep the test-case loop (\`long long t = 1; while (t--) solve();\` or \`long long t; cin >> t; while (t--) solve();\`) in \`main()\`.`,
+        '- Use top-level helper functions instead of local `[&]` lambdas, use `long long` for integer variables/containers, avoid `(int)vec.size()` casts, avoid `.reserve()`, and read with `cin >>` directly without `if (!(cin >> ...)) return;` guards.',
         '- NEVER hardcode specific test case inputs or expected outputs (no `if (input == ...)` branches for sample cases); always use the general algorithm.',
         '- Format the code cleanly across multiple lines with 2-space indentation.',
       ].join('\n'),
@@ -667,7 +691,58 @@ function promptFor(task, context) {
   };
 }
 
-function createGemini({ apiKey, model, fetchImpl }) {
+function takeModelPayload(payload, bucket, onThought) {
+  const candidate = payload && payload.candidates && payload.candidates[0];
+  if (candidate && candidate.finishReason) bucket.finishReason = candidate.finishReason;
+  const chunks = candidate && candidate.content ? candidate.content.parts || [] : [];
+  for (const part of chunks) {
+    if (!part || typeof part.text !== 'string' || !part.text) continue;
+    if (part.thought) {
+      bucket.thoughts += part.text;
+      if (typeof onThought === 'function') onThought(part.text);
+    } else {
+      bucket.visible += part.text;
+    }
+  }
+}
+
+async function collectModelParts(response, onThought) {
+  const bucket = { visible: '', thoughts: '', finishReason: '' };
+  const streamable = response.body && typeof response.body.getReader === 'function';
+  if (!streamable) {
+    takeModelPayload(await response.json(), bucket, onThought);
+    return bucket;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const consumeLine = (line) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data:')) return;
+    const data = trimmed.slice(5).trim();
+    if (!data || data === '[DONE]') return;
+    try {
+      takeModelPayload(JSON.parse(data), bucket, onThought);
+    } catch {
+      // A split frame is completed on a later newline.
+    }
+  };
+  while (true) {
+    const next = await reader.read();
+    if (next.done) break;
+    buffer += decoder.decode(next.value, { stream: true });
+    let splitAt = buffer.indexOf('\n');
+    while (splitAt !== -1) {
+      consumeLine(buffer.slice(0, splitAt));
+      buffer = buffer.slice(splitAt + 1);
+      splitAt = buffer.indexOf('\n');
+    }
+  }
+  if (buffer.trim()) consumeLine(buffer);
+  return bucket;
+}
+
+function createGemini({ apiKey, model, fetchImpl, onThought }) {
   const fetchFn = fetchImpl || fetch;
   const supportsThinkingLevel = /^gemini-[34]/i.test(String(model || MODEL));
   async function generate(task, context) {
@@ -692,6 +767,7 @@ function createGemini({ apiKey, model, fetchImpl }) {
     if (supportsThinkingLevel) {
       generationConfig.thinkingConfig = {
         thinkingLevel: 'HIGH',
+        includeThoughts: true,
       };
     }
     const replyLabel = {
@@ -719,7 +795,7 @@ function createGemini({ apiKey, model, fetchImpl }) {
     let sawRecitation = false;
     for (let tryNum = 0; tryNum < 3; tryNum += 1) {
       const config = { ...generationConfig };
-      if (config.thinkingConfig) config.thinkingConfig = { thinkingLevel: 'HIGH' };
+      if (config.thinkingConfig) config.thinkingConfig = { thinkingLevel: 'HIGH', includeThoughts: true };
       if (sawRecitation) {
         config.temperature = Math.max(config.temperature || 0.2, 0.45);
       }
@@ -734,10 +810,13 @@ function createGemini({ apiKey, model, fetchImpl }) {
       const userParts = antiRecitationSuffix
         ? [{ text: `${built.user}${antiRecitationSuffix}` }, ...parts.slice(1)]
         : parts;
+      if (typeof onThought === 'function') {
+        onThought('', { reset: true, label: THINK_LABELS[task] || 'working' });
+      }
       let response;
       try {
         response = await fetchFn(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`,
           {
             method: 'POST',
             headers: {
@@ -762,22 +841,12 @@ function createGemini({ apiKey, model, fetchImpl }) {
         throw lastError;
       }
       try {
-        const payload = await response.json();
-        const candidate = payload && payload.candidates && payload.candidates[0];
-        if (candidate && candidate.finishReason === 'RECITATION') {
-          sawRecitation = true;
-        }
-        const chunks = candidate && candidate.content ? candidate.content.parts || [] : [];
-        const visible = chunks
-          .filter((part) => part && !part.thought && typeof part.text === 'string')
-          .map((part) => part.text)
-          .join('');
-        const thoughts = chunks
-          .filter((part) => part && part.thought && typeof part.text === 'string')
-          .map((part) => part.text)
-          .join('');
-        const text = visible.trim() ? visible : thoughts;
-        if (!text.trim() || (candidate && candidate.finishReason === 'MAX_TOKENS')) {
+        const collected = await collectModelParts(response, (chunk) => {
+          if (typeof onThought === 'function') onThought(redact(chunk, apiKey));
+        });
+        if (collected.finishReason === 'RECITATION') sawRecitation = true;
+        const text = collected.visible.trim() ? collected.visible : collected.thoughts;
+        if (!text.trim() || collected.finishReason === 'MAX_TOKENS') {
           lastError = failed('cut');
           continue;
         }
@@ -811,13 +880,29 @@ function formatRun(result) {
 
 function createAgentControl({ apiKey, model, generate, run }) {
   const secret = apiKey || '';
+  const thoughtSink = {
+    fn(text, meta) {
+      if (!state) return;
+      if (meta && meta.reset) {
+        state.thinking = '';
+        state.thinkingLabel = clip(meta.label || '', 80);
+        return;
+      }
+      const clean = redact(String(text || ''), secret).replace(/\0/g, '');
+      if (!clean) return;
+      const next = state.thinking + clean;
+      state.thinking = next.length > THINKING_LIMIT ? next.slice(next.length - THINKING_LIMIT) : next;
+    },
+  };
+  let state;
   const talk =
     generate ||
     createGemini({
       apiKey: secret,
       model: model || MODEL,
+      onThought: (text, meta) => thoughtSink.fn(text, meta),
     });
-  const state = {
+  state = {
     phase: 'idle',
     step: 'idle',
     attempt: 0,
@@ -840,6 +925,8 @@ function createAgentControl({ apiKey, model, generate, run }) {
     output: '',
     failure: '',
     activity: '',
+    thinking: '',
+    thinkingLabel: '',
   };
 
   function say(text, kind) {
@@ -891,6 +978,8 @@ function createAgentControl({ apiKey, model, generate, run }) {
       })),
       output: state.output,
       activity: state.activity,
+      thinking: state.thinking,
+      thinkingLabel: state.thinkingLabel,
       running: state.running,
     };
   }
@@ -1213,6 +1302,8 @@ function createAgentControl({ apiKey, model, generate, run }) {
     state.output = '';
     state.failure = '';
     state.activity = '';
+    state.thinking = '';
+    state.thinkingLabel = '';
     return snapshot();
   }
 
@@ -1241,6 +1332,8 @@ function createAgentControl({ apiKey, model, generate, run }) {
     state.approach = '';
     state.failure = '';
     state.output = '';
+    state.thinking = '';
+    state.thinkingLabel = '';
     state.hint = clip(input.hint, 4_000);
     state.pendingHint = '';
     state.stopForCases = false;

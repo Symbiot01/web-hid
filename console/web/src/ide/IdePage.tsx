@@ -97,7 +97,7 @@ export function IdePage({ busy, onLogout }: Props) {
   const [cases, setCases] = useState<TestCase[]>(STARTER_CASES);
   const [activeCaseId, setActiveCaseId] = useState(STARTER_CASES[0].id);
   const [output, setOutput] = useState('');
-  const [mode, setMode] = useState<AgentMode>('ask');
+  const [mode, setMode] = useState<AgentMode>('agent');
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [agentPhase, setAgentPhase] = useState<AgentPhase>('idle');
   const [agentStep, setAgentStep] = useState<AgentStep>('idle');
@@ -107,6 +107,8 @@ export function IdePage({ busy, onLogout }: Props) {
   const [agentEntry, setAgentEntry] = useState('solve');
   const [agentSignature, setAgentSignature] = useState('');
   const [agentActivity, setAgentActivity] = useState('');
+  const [agentThinking, setAgentThinking] = useState('');
+  const [agentThinkingLabel, setAgentThinkingLabel] = useState('');
   const [agentReady, setAgentReady] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmLogout, setConfirmLogout] = useState(false);
@@ -399,6 +401,8 @@ export function IdePage({ busy, onLogout }: Props) {
     setAgentEntry(view.entry ?? 'solve');
     setAgentSignature(view.signature ?? '');
     setAgentActivity(view.activity ?? '');
+    setAgentThinking(view.thinking ?? '');
+    setAgentThinkingLabel(view.thinkingLabel ?? '');
     setMessages(
       view.messages.map((item, index) => ({
         id: `agent-msg-${index}`,
@@ -475,7 +479,7 @@ export function IdePage({ busy, onLogout }: Props) {
           applyAgent(view);
         })
         .catch(() => undefined);
-    }, 1500);
+    }, 400);
     return () => window.clearInterval(timer);
   }, [agentPhase]);
 
@@ -712,6 +716,8 @@ export function IdePage({ busy, onLogout }: Props) {
                 entry={agentEntry}
                 signature={agentSignature}
                 activity={agentActivity}
+                thinking={agentThinking}
+                thinkingLabel={agentThinkingLabel}
                 cases={cases}
                 configured={agentReady}
                 messages={messages}
