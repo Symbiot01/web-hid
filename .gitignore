@@ -26,6 +26,10 @@ dist-ssr/
 # HID Vite emit (Docker rebuilds this)
 console/src/public/assets/
 console/src/public/index.html
+console/data/
+*.db
+*.db-shm
+*.db-wal
 
 # Editor / OS
 .idea/

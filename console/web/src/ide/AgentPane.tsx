@@ -7,14 +7,16 @@ import {
   type FormEvent,
   type ReactNode,
 } from 'react';
-import type {
-  AgentKind,
-  AgentMessage,
-  AgentMode,
-  AgentPhase,
-  AgentStep,
-  AgentThoughtEntry,
-  TestCase,
+import {
+  PROBLEM_TYPE_LABELS,
+  type AgentKind,
+  type AgentMessage,
+  type AgentMode,
+  type AgentPhase,
+  type AgentStep,
+  type AgentThoughtEntry,
+  type ProblemType,
+  type TestCase,
 } from './types.ts';
 
 type ImagePayload = { mime: string; base64: string };
@@ -27,6 +29,8 @@ const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 type Props = {
   mode: AgentMode;
   phase: AgentPhase;
+  problemType?: ProblemType;
+  fileName?: string;
   step?: AgentStep;
   attempt?: number;
   maxAttempts?: number;
@@ -72,13 +76,16 @@ function shortStageLabel(item: AgentThoughtEntry): string {
     item.task === 'cases' ||
     item.task === 'checkCases' ||
     item.task === 'makeCases' ||
-    item.task === 'moreCases'
+    item.task === 'moreCases' ||
+    item.task === 'review'
   ) {
     return 'Cases';
   }
   if (item.task === 'harness') return 'Wrapper';
   if (item.task === 'solve') return 'Solve';
   if (item.task === 'retry') return 'Retry';
+  if (item.task === 'verify') return 'Verify';
+  if (item.task === 'fix') return 'Repair';
   if (item.task === 'ask') return 'Answer';
   return item.label;
 }
@@ -162,15 +169,29 @@ function renderFormattedText(text: string): ReactNode {
   });
 }
 
-const PIPELINE: Array<{ key: AgentStep; label: string }> = [
+const CPP_PIPELINE: Array<{ key: AgentStep; label: string }> = [
   { key: 'identify', label: '1. Problem' },
   { key: 'cases', label: '2. Cases' },
   { key: 'harness', label: '3. Wrapper' },
   { key: 'solve', label: '4. Solve' },
 ];
 
-function stageRank(step: AgentStep | undefined, phase: AgentPhase): number {
+const MULTI_PIPELINE: Array<{ key: AgentStep; label: string }> = [
+  { key: 'identify', label: '1. Problem' },
+  { key: 'cases', label: '2. Scenarios' },
+  { key: 'solve', label: '3. Solve' },
+  { key: 'test', label: '4. Verify' },
+];
+
+function stageRank(step: AgentStep | undefined, phase: AgentPhase, problemType: ProblemType = 'cpp'): number {
   if (phase === 'solved' || step === 'done') return 5;
+  if (problemType !== 'cpp') {
+    if (step === 'test') return 4;
+    if (step === 'solve' || step === 'harness') return 3;
+    if (step === 'cases') return 2;
+    if (step === 'identify') return 1;
+    return 0;
+  }
   if (step === 'test' || step === 'solve') return 4;
   if (step === 'harness') return 3;
   if (step === 'cases') return 2;
@@ -181,6 +202,8 @@ function stageRank(step: AgentStep | undefined, phase: AgentPhase): number {
 export function AgentPane({
   mode,
   phase,
+  problemType = 'cpp',
+  fileName = 'main.cpp',
   step = 'idle',
   attempt = 0,
   maxAttempts = 3,
@@ -231,13 +254,24 @@ export function AgentPane({
     blocked: 'Check cases',
   };
 
+  const langLabel = PROBLEM_TYPE_LABELS[problemType] || 'C++17';
+
   const stageDetail: Record<AgentStep, string> = {
     idle: 'Starting…',
-    identify: 'Extracting problem statement, constraints & sample cases from your input…',
-    cases: 'Preparing and verifying bare-bones stdin/stdout test cases…',
+    identify: 'Extracting problem statement, domain type & sample cases from your input…',
+    cases:
+      problemType === 'cpp'
+        ? 'Preparing and verifying bare-bones stdin/stdout test cases…'
+        : `Preparing and verifying ${langLabel} scenarios…`,
     harness: `Building main() test wrapper around ${entry}()…`,
-    solve: `Writing C++17 solution in ${entry}()${attempt > 0 ? ` (attempt ${attempt}/${maxAttempts})` : ''}…`,
-    test: `Compiling and running ${cases.length || ''} test case${cases.length === 1 ? '' : 's'}…`,
+    solve:
+      problemType === 'cpp'
+        ? `Writing C++17 solution in ${entry}()${attempt > 0 ? ` (attempt ${attempt}/${maxAttempts})` : ''}…`
+        : `Writing ${langLabel} solution in ${fileName}${attempt > 0 ? ` (attempt ${attempt}/${maxAttempts})` : ''}…`,
+    test:
+      problemType === 'cpp'
+        ? `Compiling and running ${cases.length || ''} test case${cases.length === 1 ? '' : 's'}…`
+        : `Running static syntax check & logic verification on ${fileName}…`,
     done: 'Completed.',
   };
 
@@ -456,7 +490,8 @@ export function AgentPane({
     return <div className="ide-msg-body">{renderFormattedText(message.text)}</div>;
   }
 
-  const rank = stageRank(step, phase);
+  const rank = stageRank(step, phase, problemType);
+  const pipeline = problemType === 'cpp' ? CPP_PIPELINE : MULTI_PIPELINE;
   const passCount = cases.filter((item) => item.status === 'pass').length;
   const hasRunCases = cases.some((item) => item.status !== 'idle');
   const totalCaseTimeMs = cases.reduce((acc, item) => acc + (item.timeMs || 0), 0);
@@ -530,7 +565,7 @@ export function AgentPane({
         <div className="ide-agent-status" aria-label="Agent progress">
           <div className="ide-agent-steps">
             {thoughtLog.length === 0
-              ? PIPELINE.map((item, idx) => {
+              ? pipeline.map((item, idx) => {
                   const stepIdx = idx + 1;
                   const stateClass = rank > stepIdx ? 'done' : rank === stepIdx ? 'current' : 'pending';
                   return (
@@ -540,9 +575,14 @@ export function AgentPane({
                   );
                 })
               : null}
-            <code className="ide-meta-chip" title={signature || `${entry}()`}>
-              {entry}()
-            </code>
+            <span className="ide-meta-chip" title={`Target file: ${fileName}`}>
+              {langLabel} · {fileName}
+            </span>
+            {problemType === 'cpp' ? (
+              <code className="ide-meta-chip" title={signature || `${entry}()`}>
+                {entry}()
+              </code>
+            ) : null}
             {attempt > 0 ? (
               <span className="ide-meta-chip">
                 try {attempt}/{maxAttempts}
@@ -577,12 +617,12 @@ export function AgentPane({
         {messages.length === 0 && !hasTelemetry && !working ? (
           <li className="ide-empty-card">
             <p className="ide-empty-title">
-              {mode === 'ask' ? 'Ask about the open C++ file' : 'Harness-First Coding Agent'}
+              {mode === 'ask' ? `Ask about ${fileName}` : 'Multi-Domain Coding Agent'}
             </p>
             <p className="muted ide-empty">
               {mode === 'ask'
-                ? 'Ask how the current program works, check time complexity, or debug an edge case without modifying the editor.'
-                : 'Paste a problem statement or attach a screenshot. The agent extracts the signature & sample format, builds a main() test wrapper first, and solves inside the target function or solve().'}
+                ? 'Ask how the current code works, check complexity, or debug an edge case without modifying the editor.'
+                : 'Paste a problem statement or attach screenshots. Algorithms default to C++17 (main.cpp); SQL, Python, Bash, Docker, YAML, and JS problems automatically open in a dedicated tab with syntax & logic verification.'}
             </p>
           </li>
         ) : (

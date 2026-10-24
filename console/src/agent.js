@@ -1,5 +1,12 @@
 'use strict';
 
+const crypto = require('node:crypto');
+const {
+  normalizeProblemType,
+  canonicalFileName,
+  checkSyntax,
+} = require('./syntaxCheck');
+
 const MODEL = 'gemini-4-argon';
 const MAX_APPROACHES = 3;
 const MAX_COMPILE_FIXES = 3;
@@ -12,6 +19,7 @@ const OUTPUT_LIMIT = 12_000;
 const THINKING_LIMIT = 6_000;
 const THOUGHT_LOG_LIMIT = 16;
 const DRAFT_PREVIEW_LIMIT = 2_400;
+const MESSAGE_LIMIT = 80;
 
 const THINK_LABELS = {
   identify: 'reading the problem',
@@ -21,7 +29,18 @@ const THINK_LABELS = {
   solve: 'solving',
   retry: 'trying another approach',
   fix: 'repairing the code',
+  verify: 'verifying syntax & logic',
   ask: 'answering',
+};
+
+const TYPE_LABELS = {
+  cpp: 'C++17',
+  python: 'Python 3',
+  sql: 'SQL',
+  bash: 'Bash',
+  dockerfile: 'Dockerfile',
+  yaml: 'YAML',
+  javascript: 'JavaScript',
 };
 
 function extractDraftPreview(rawJson) {
@@ -223,8 +242,9 @@ function sourceHasEntry(source, entry) {
   return true;
 }
 
-function cleanSource(source) {
+function cleanSource(source, problemType = 'cpp') {
   if (typeof source !== 'string') return '';
+  const type = normalizeProblemType(problemType);
   const normalized = source
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
@@ -235,7 +255,10 @@ function cleanSource(source) {
   if (!normalized) return '';
   if (!normalized.includes('\n') && normalized.includes('\\n')) {
     const unescaped = normalized.replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t');
-    return cleanSource(unescaped);
+    return cleanSource(unescaped, type);
+  }
+  if (type !== 'cpp') {
+    return `${normalized.replace(/\n{4,}/g, '\n\n\n').trim()}\n`;
   }
   const withoutBoilerplate = normalized
     .replace(/[ \t]*(?:std::)?ios(?:_base)?::sync_with_stdio\s*\([^;]*\)\s*;[ \t]*\n?/g, '')
@@ -390,9 +413,11 @@ function hasHardcodedCases(source, cases) {
   return false;
 }
 
-function validSource(source, secret) {
+function validSource(source, secret, problemType = 'cpp') {
   if (typeof source !== 'string' || source.length === 0 || source.length > SOURCE_LIMIT) return false;
-  if (source.includes('\0') || !source.includes('main')) return false;
+  if (source.includes('\0')) return false;
+  const type = normalizeProblemType(problemType);
+  if (type === 'cpp' && !source.includes('main')) return false;
   if (secret && source.includes(secret)) return false;
   return true;
 }
@@ -488,6 +513,8 @@ function schemaFor(task) {
       type: 'OBJECT',
       properties: {
         title: { type: 'STRING' },
+        problemType: { type: 'STRING' },
+        fileName: { type: 'STRING' },
         statement: { type: 'STRING' },
         casesFromProblem: { type: 'BOOLEAN' },
         cases: {
@@ -528,6 +555,29 @@ function schemaFor(task) {
         },
       },
       required: ['ok', 'reason'],
+    };
+  }
+  if (task === 'verify') {
+    return {
+      type: 'OBJECT',
+      properties: {
+        ok: { type: 'BOOLEAN' },
+        reason: { type: 'STRING' },
+        cases: {
+          type: 'ARRAY',
+          items: {
+            type: 'OBJECT',
+            properties: {
+              input: { type: 'STRING' },
+              expected: { type: 'STRING' },
+              actual: { type: 'STRING' },
+              status: { type: 'STRING' },
+            },
+            required: ['input', 'expected', 'actual', 'status'],
+          },
+        },
+      },
+      required: ['ok', 'reason', 'cases'],
     };
   }
   if (task === 'makeCases') {
@@ -583,6 +633,9 @@ function promptFor(task, context) {
   const hint = clip(context.hint, 4_000);
   const source = clip(context.source, 24_000);
   const failure = clip(context.failure, 6_000);
+  const problemType = normalizeProblemType(context.problemType, context.fileName);
+  const fileName = canonicalFileName(problemType, context.fileName);
+  const langLabel = TYPE_LABELS[problemType] || 'C++17';
   const entry = entryFunction(context.entry);
   const signature = entrySignature(entry, context.signature);
   const format = clip(context.format, 1_000) || 'Match the exact input and expected output text in Cases.';
@@ -593,24 +646,37 @@ function promptFor(task, context) {
       : '';
     return {
       system: [
-        'You summarize programming problems from text or screenshots into your own concise technical specification.',
-        'IMPORTANT: Never transcribe or copy problem story text verbatim from screenshots (verbatim copying triggers recitation filters). Always paraphrase and synthesize the mathematical/algorithmic problem specification in your own words.',
+        'You summarize programming, SQL, Bash, Docker, or DevOps problems from text or screenshots into your own concise technical specification.',
+        'IMPORTANT: Never transcribe or copy problem story text verbatim from screenshots (verbatim copying triggers recitation filters). Always paraphrase and synthesize the mathematical/algorithmic or technical problem specification in your own words.',
         'If multiple images/screenshots are provided, they show different parts of the SAME problem (description, examples, constraints, starter code template). Combine all images and any existing context into one specification.',
-        'Reply with JSON only: {"title":"","statement":"","casesFromProblem":false,"cases":[{"input":"","expected":""}],"plan":"","functionName":"","signature":"","format":""}.',
-        '- title: short problem title (e.g. "Median of Two Sorted Arrays", "Shortest Routes I").',
-        '- statement: concise, paraphrased technical problem specification in your own words (what is given, what operations/rules apply, what to return/print, and exact numeric constraints). If a starter code template or class/function stub is shown in the prompt, screenshot, or editor, include that C++ signature.',
-        '- casesFromProblem / cases: extract all sample inputs and outputs across all provided screenshots/context ONLY when shown in the problem. If none are shown, set casesFromProblem to false and cases to []. Never guess or invent sample outputs here.',
-        '- Agentic Bare-Bones Competitive Programming Format (MANDATORY):',
-        '  * Convert every sample `input` and `expected` output into clean, bare-bones competitive programming stdin/stdout so `cin >>` can read it directly without string/bracket parsing. Use real JSON newline escapes (`\\n`), never double-escaped `\\\\n`.',
-        '  * 1D Arrays & Scalars: Strip variable labels (`arr[] =`, `nums1 =`, `target =`, `s =`), brackets `[...]`, `{...}`, quotes `"..."`, and commas. Prefix every 1D array with its length `n` on a line followed by `n` space-separated elements on the next line (unless `n` is already given immediately before it). Example: `arr[] = [1, 2, 3, 4, 5]` -> `"5\\n1 2 3 4 5\\n"`; `nums = [2,7,11,15], target = 9` -> `"4\\n2 7 11 15\\n9\\n"`.',
-        '  * 2D Arrays / Grids: Convert `[[1,2,3],[4,5,6]]` into `"2 3\\n1 2 3\\n4 5 6\\n"` (`rows cols` followed by each row).',
-        '  * Query / Class-Design Problems (e.g. `["LRUCache", "put", "get"]` with `[[2], [1, 1], [1]]`, or `RandomizedCollection`, `Trie`, `MinStack`): Convert the parallel command/argument arrays into bare-bones query lines: Line 1 is constructor argument(s) (if any) and operation count `q` (or `q` on Line 1 if no constructor args), followed by `q` lines of `op arg1 arg2...`. Omit `null` constructor/void outputs in `expected` and include only non-void query return values separated by spaces or newlines (and state that exact convention in `format`).',
-        '  * Expected Outputs: Strip outer `[` `]`, quotes, and commas into bare space- or newline-separated tokens (e.g. `[0, 1]` -> `"0 1\\n"`).',
+        'Reply with JSON only: {"title":"","problemType":"cpp","fileName":"main.cpp","statement":"","casesFromProblem":false,"cases":[{"input":"","expected":""}],"plan":"","functionName":"","signature":"","format":""}.',
+        '- title: short problem title (e.g. "Median of Two Sorted Arrays", "Department Top Three Salaries", "Multi-stage Node Dockerfile").',
+        '- problemType & fileName (MANDATORY CLASSIFICATION RULE):',
+        '  * DEFAULT TO C++ (`"problemType": "cpp"`, `"fileName": "main.cpp"`) for ALL general algorithms, data structures, competitive programming, math, graph, DP, array, string, or OOP class-design problems that can be solved in C++.',
+        '  * ONLY set a non-C++ `problemType` when the problem statement, screenshot, starter code, or user request EXPLICITLY requires another technology:',
+        '    - `"python"` (`"fileName": "solution.py"`): explicitly Python-specific problem (e.g. pandas/numpy/decorators/generators or user explicitly asked for Python).',
+        '    - `"sql"` (`"fileName": "query.sql"`): SQL database query or schema problem (SELECT, JOIN, GROUP BY, window functions, DDL/DML).',
+        '    - `"bash"` (`"fileName": "script.sh"`): shell script / Linux CLI / awk / sed / grep / text processing or automation script problem.',
+        '    - `"dockerfile"` (`"fileName": "Dockerfile"`): Docker containerization or multi-stage Dockerfile problem.',
+        '    - `"yaml"` (`"fileName": "config.yaml"`): Kubernetes manifest, Docker Compose, or CI/CD YAML configuration problem.',
+        '    - `"javascript"` (`"fileName": "solution.js"`): explicitly JavaScript / TypeScript / Node.js specific problem.',
+        '- statement: concise, paraphrased technical problem specification in your own words (what is given, schemas/tables/files, what operations/rules apply, what to return/print, and exact constraints). If a starter code template or class/function stub is shown, include that signature.',
+        '- casesFromProblem / cases: extract all sample inputs/scenarios and expected outputs across all provided screenshots/context ONLY when shown in the problem. If none are shown, set casesFromProblem to false and cases to []. Never guess or invent sample outputs here.',
+        '- Format of `cases`:',
+        '  * IF `problemType` is `"cpp"`: Agentic Bare-Bones Competitive Programming Format (MANDATORY):',
+        '    - Convert every sample `input` and `expected` output into clean, bare-bones competitive programming stdin/stdout so `cin >>` can read it directly without string/bracket parsing. Use real JSON newline escapes (`\\n`), never double-escaped `\\\\n`.',
+        '    - 1D Arrays & Scalars: Strip variable labels (`arr[] =`, `nums1 =`, `target =`, `s =`), brackets `[...]`, `{...}`, quotes `"..."`, and commas. Prefix every 1D array with its length `n` on a line followed by `n` space-separated elements on the next line (unless `n` is already given immediately before it). Example: `arr[] = [1, 2, 3, 4, 5]` -> `"5\\n1 2 3 4 5\\n"`; `nums = [2,7,11,15], target = 9` -> `"4\\n2 7 11 15\\n9\\n"`.',
+        '    - 2D Arrays / Grids: Convert `[[1,2,3],[4,5,6]]` into `"2 3\\n1 2 3\\n4 5 6\\n"` (`rows cols` followed by each row).',
+        '    - Query / Class-Design Problems (e.g. `["LRUCache", "put", "get"]` with `[[2], [1, 1], [1]]`, or `RandomizedCollection`, `Trie`, `MinStack`): Convert the parallel command/argument arrays into bare-bones query lines: Line 1 is constructor argument(s) (if any) and operation count `q` (or `q` on Line 1 if no constructor args), followed by `q` lines of `op arg1 arg2...`. Omit `null` constructor/void outputs in `expected` and include only non-void query return values separated by spaces or newlines (and state that exact convention in `format`).',
+        '    - Expected Outputs: Strip outer `[` `]`, quotes, and commas into bare space- or newline-separated tokens (e.g. `[0, 1]` -> `"0 1\\n"`).',
+        '  * IF `problemType` is NOT `"cpp"` (`python`, `sql`, `bash`, `dockerfile`, `yaml`, `javascript`):',
+        '    - Represent each sample case or verification scenario clearly: `input` is the sample input data / table rows / file contents / environment scenario, and `expected` is the expected query result table / stdout / return value / container requirement.',
         '- Template vs. Standard Competitive Programming rule:',
-        '  1. IF a starter template function or class signature is given in the problem or screenshot (other than a bare `int main()` skeleton — e.g. LeetCode/HackerRank `class Solution` with `findMedianSortedArrays`, a standalone function like `int trap(vector<int>& height)`, or an OOP design class like `class LRUCache`): conform strictly to that template — set `functionName` to that exact method, function, or class name and `signature` to its clean C++17 signature only.',
-        '  2. OTHERWISE (standard stdin/stdout competitive programming like Codeforces, AtCoder, CSES, ICPC, no template given, or only a bare `int main() { ... }` starter skeleton is given): ALWAYS set `functionName` to `"solve"` and `signature` to `"void solve()"` (never `void solve(istream&, ostream&)`). `void solve()` handles one test case reading directly from `cin` and writing directly to `cout`, while `main()` loops over test cases.',
-        '- format: precise description of the bare-bones stdin token order and bare-bones stdout format used in `cases`.',
-        '- plan: 1-2 sentences stating the optimal algorithm and its time and space complexity.',
+        '  1. IF `problemType` is `"cpp"` and a starter template function or class signature is given (other than a bare `int main()` skeleton): conform strictly to that template — set `functionName` to that exact method, function, or class name and `signature` to its clean C++17 signature only.',
+        '  2. IF `problemType` is `"cpp"` and no template is given (standard stdin/stdout competitive programming): ALWAYS set `functionName` to `"solve"` and `signature` to `"void solve()"`.',
+        '  3. IF `problemType` is NOT `"cpp"`: set `functionName` to the target function/script/query name (e.g. `"solve"`, `"query"`, `"script"`, `"Dockerfile"`) and `signature` to the target function header or file type summary.',
+        '- format: precise description of the input/scenario format and expected output format used in `cases`.',
+        '- plan: 1-2 sentences stating the optimal algorithm, query strategy, or architecture and its complexity.',
       ].join('\n'),
       user: `Problem text:\n${clip(context.text, 12_000)}${prior}\n\nCurrent editor file:\n${source}`,
     };
@@ -618,17 +684,32 @@ function promptFor(task, context) {
   if (task === 'review') {
     return {
       system: [
-        'You verify sample test cases by hand against the problem statement. Do not write a program. Reply with JSON only: {"ok":true,"reason":"","cases":[{"input":"","expected":""}]}.',
-        '- Note that Cases may be formatted in bare-bones competitive programming stdin/stdout (e.g. array size `n` followed by elements, or `q` lines of `op arg` queries without `null` for constructor).',
+        'You verify sample test cases or scenarios by hand against the problem statement. Do not write a program. Reply with JSON only: {"ok":true,"reason":"","cases":[{"input":"","expected":""}]}.',
+        '- Note that Cases may be formatted in bare-bones competitive programming stdin/stdout (for C++) or scenario/table format (for SQL/Python/Bash/Docker).',
         '- If an operation is randomized (e.g. `getRandom()`) or the problem allows multiple valid answers ("return any valid..."), set `ok` to `true` as long as the expected output is a valid possible outcome.',
-        '- Set `ok` to `false` ONLY when a sample expected output is mathematically impossible under the problem statement.',
-        '- Whenever you set `ok` to `false`, also return `cases` containing the full list of cases with every incorrect `expected` output repaired to the exact mathematically valid answer.',
+        '- Set `ok` to `false` ONLY when a sample expected output is mathematically or logically impossible under the problem statement.',
+        '- Whenever you set `ok` to `false`, also return `cases` containing the full list of cases with every incorrect `expected` output repaired to the exact valid answer.',
       ].join('\n'),
-      user: `Statement:\n${statement}\n\nCases:\n${cases}`,
+      user: `Problem type: ${langLabel} (${fileName})\n\nStatement:\n${statement}\n\nCases:\n${cases}`,
     };
   }
   if (task === 'makeCases') {
     const hasExisting = Array.isArray(context.cases) && context.cases.length > 0;
+    if (problemType !== 'cpp') {
+      return {
+        system: [
+          hasExisting
+            ? `Generate 3 NEW, thorough edge-case verification scenarios for this ${langLabel} (${fileName}) problem that are NOT duplicates of Existing cases.`
+            : `Generate 3 to 4 thorough verification scenarios / test cases for this ${langLabel} (${fileName}) problem, covering a basic case, boundary/empty/NULL case, and tricky corner case.`,
+          'Reply with JSON only: {"cases":[{"input":"","expected":""}]}.',
+          '- For Python/Bash/JS: `input` is the sample arguments or stdin/file input, and `expected` is the exact expected return value or stdout.',
+          '- For SQL: `input` describes the sample table rows (including NULLs, duplicates, ties, or empty groups), and `expected` describes the exact expected output rows.',
+          '- For Dockerfile/YAML: `input` describes a specific requirement or build/runtime condition from the prompt, and `expected` states the exact directive/behavior the solution must satisfy.',
+          '- Trace the problem rules carefully by hand so every `expected` output is 100% accurate.',
+        ].join('\n'),
+        user: `Problem type: ${langLabel} (${fileName})\n\nStatement:\n${statement}\n\nFormat:\n${format}\n\nExisting cases:\n${cases}\n\nFocus / user request:\n${hint || 'Add thorough edge, boundary, and corner cases.'}`,
+      };
+    }
     return {
       system: [
         hasExisting
@@ -664,6 +745,23 @@ function promptFor(task, context) {
     };
   }
   if (task === 'solve' || task === 'retry') {
+    if (problemType !== 'cpp') {
+      return {
+        system: [
+          `Write the cleanest, optimal, production-ready ${langLabel} solution for \`${fileName}\`.`,
+          'Reply with JSON only: {"source":"","approach":""}.',
+          `Domain-specific rules for ${langLabel} (\`${fileName}\`):`,
+          '- Python (`solution.py`): Write clean, idiomatic Python 3. Conform to any starter class/function signature shown in the problem; if none is given, write clean modular functions and a `if __name__ == "__main__":` entry block if stdin/stdout is expected.',
+          '- SQL (`query.sql`): Write a clean, standard SQL query (CTEs with `WITH`, explicit `JOIN` conditions, proper `NULL` handling, window functions `DENSE_RANK()`/`ROW_NUMBER()`, and exact output column aliases and ordering required by the statement). Do not wrap in markdown fences.',
+          '- Bash (`script.sh`): Start with `#!/usr/bin/env bash` and `set -euo pipefail`. Properly quote variables (`"$var"`), handle empty inputs/spaces in filenames, and produce the exact required stdout/exit behavior.',
+          '- Dockerfile (`Dockerfile`): Write a clean, secure, production-ready `Dockerfile` (valid `FROM`, `WORKDIR`, layer-cached dependency installation before `COPY . .`, non-root `USER` when appropriate, `EXPOSE`, and `ENTRYPOINT`/`CMD`).',
+          '- YAML (`config.yaml`) / JavaScript (`solution.js`): Write clean, valid, well-indented code satisfying every constraint in the statement.',
+          '- NEVER hardcode sample test case outputs. If `Previous result` shows syntax or logic errors, fix every reported issue carefully.',
+          '- `approach` is 1-2 concise sentences explaining the solution strategy and complexity.',
+        ].join('\n'),
+        user: `Problem type: ${langLabel} (${fileName})\n\nStatement:\n${statement}\n\nTarget:\n${signature || fileName}\n\nFormat:\n${format}\n\nVerification cases:\n${cases}\n\nApproach:\n${hint || `Write the cleanest, most reliable ${langLabel} solution that handles all edge cases.`}\n\nPrevious source:\n${source}\n\nPrevious result:\n${failure}`,
+      };
+    }
     return {
       system: [
         'Write the simplest, cleanest, optimal, natural human-style C++17 solution program.',
@@ -689,6 +787,18 @@ function promptFor(task, context) {
     };
   }
   if (task === 'fix') {
+    if (problemType !== 'cpp') {
+      return {
+        system: [
+          `Repair the ${langLabel} file (\`${fileName}\`) so its syntax and logic are 100% valid, clean, and readable.`,
+          'Reply with JSON only: {"source":""}.',
+          '- Fix all reported syntax errors, missing clauses, quoting issues, or logic bugs.',
+          '- NEVER hardcode specific sample test case inputs or outputs.',
+          '- Return only the clean source code inside JSON `{"source":"..."}` without markdown code fences.',
+        ].join('\n'),
+        user: `Problem type: ${langLabel} (${fileName})\n\nWhat is wrong:\n${failure}\n\nStatement:\n${statement}\n\nCases:\n${cases}\n\nSource:\n${source}`,
+      };
+    }
     return {
       system: [
         'Repair the C++17 program so it compiles cleanly and remains simple, natural, and readable.',
@@ -702,9 +812,24 @@ function promptFor(task, context) {
       user: `What is wrong:\n${failure}\n\nFunction:\n${entry}\n\nSignature:\n${signature}\n\nSample format:\n${format}\n\nCases:\n${cases}\n\nSource:\n${source}`,
     };
   }
+  if (task === 'verify') {
+    return {
+      system: [
+        `You are a strict syntax and logic dry-run verifier for ${langLabel} (\`${fileName}\`).`,
+        'Trace the provided source code step-by-step against the problem statement and every case in Cases.',
+        'Reply with JSON only: {"ok":true,"reason":"","cases":[{"input":"","expected":"","actual":"","status":"pass"}]}.',
+        'Verification rules:',
+        '1. Check syntax & structural validity for the target language (e.g. valid SQL clauses/joins/aggregations/column names; valid Bash quoting/pipes/exit codes; valid Dockerfile instructions/stage names/ports; valid Python indentation/types/imports).',
+        '2. Dry-run the code mentally on EVERY item in Cases: set `actual` to what the code actually produces (or satisfies) on that `input`, and set `status` to `"pass"` if it matches `expected` and satisfies the statement, or `"fail"` otherwise.',
+        '3. Check for subtle logic bugs: NULL handling, empty sets, duplicates/ties, off-by-one errors, missing edge cases, or hardcoded sample values.',
+        '4. Set `ok` to `true` ONLY if all cases pass and the code is syntactically and logically sound for all constraints. Otherwise set `ok` to `false` and explain the exact flaw in `reason`.',
+      ].join('\n'),
+      user: `Problem type: ${langLabel} (${fileName})\n\nStatement:\n${statement}\n\nCases:\n${cases}\n\nSource:\n${source}`,
+    };
+  }
   return {
-    system: 'Answer the question about this C++ file clearly and concisely. Do not claim the file was edited. Reply with JSON only: {"text":""}.',
-    user: `File:\n${source}\n\nQuestion:\n${clip(context.text, 4_000)}`,
+    system: `Answer the question about this ${langLabel} file (${fileName}) clearly and concisely. Do not claim the file was edited. Reply with JSON only: {"text":""}.`,
+    user: `File (${fileName}):\n${source}\n\nQuestion:\n${clip(context.text, 4_000)}`,
   };
 }
 
@@ -796,6 +921,7 @@ function createGemini({ apiKey, model, fetchImpl, onThought, onProgress }) {
       solve: 'solution',
       retry: 'solution',
       fix: 'repair',
+      verify: 'verification',
       ask: 'answer',
     }[task] || 'model';
     const failed = (reason) => {
@@ -945,7 +1071,7 @@ function formatRun(result) {
     .join('\n\n');
 }
 
-function createAgentControl({ apiKey, model, generate, run }) {
+function createAgentControl({ apiKey, model, generate, run, onSaveHistory }) {
   const secret = apiKey || '';
   const listeners = new Set();
   let flushTimer = null;
@@ -1119,6 +1245,9 @@ function createAgentControl({ apiKey, model, generate, run }) {
   talk.supportsHarness = Boolean(baseTalk && baseTalk.supportsHarness);
 
   state = {
+    problemId: '',
+    problemType: 'cpp',
+    fileName: 'main.cpp',
     phase: 'idle',
     step: 'idle',
     attempt: 0,
@@ -1150,13 +1279,50 @@ function createAgentControl({ apiKey, model, generate, run }) {
     thoughtLog: [],
   };
 
+  function persistHistory() {
+    if (typeof onSaveHistory !== 'function') return;
+    if (!state || !state.problemId || !state.statement || !state.source) return;
+    try {
+      onSaveHistory({
+        id: state.problemId,
+        title: redact(state.title || 'Untitled Problem', secret),
+        problemType: normalizeProblemType(state.problemType, state.fileName),
+        fileName: canonicalFileName(state.problemType, state.fileName),
+        entry: redact(state.entry || 'solve', secret),
+        signature: redact(state.signature || '', secret),
+        format: redact(state.format || '', secret),
+        phase: state.phase || 'solved',
+        statement: redact(state.statement, secret),
+        approach: redact(state.approach || '', secret),
+        source: redact(state.source, secret),
+        messages: state.messages.map((item) => ({
+          role: item.role === 'user' ? 'user' : 'assistant',
+          text: redact(item.text, secret),
+          kind: item.kind || (item.role === 'user' ? 'user' : 'step'),
+        })),
+        cases: state.cases.map((item) => ({
+          input: redact(item.input, secret),
+          expected: redact(item.expected, secret),
+          actual: redact(item.actual || '', secret),
+          stderr: redact(item.stderr || '', secret),
+          reason: item.reason || null,
+          timeMs: typeof item.timeMs === 'number' ? item.timeMs : 0,
+          status: item.status || 'idle',
+        })),
+        output: redact(state.output || '', secret),
+      });
+    } catch {
+      // Do not fail agent execution on history storage error.
+    }
+  }
+
   function say(text, kind) {
     const clean = redact(clip(text, 4_000), secret);
     if (!clean) return;
     const messageKind = kind || 'step';
     state.messages.push({ role: 'assistant', text: clean, kind: messageKind });
     if (messageKind === 'step') state.activity = clean;
-    if (state.messages.length > 40) state.messages.splice(0, state.messages.length - 40);
+    if (state.messages.length > MESSAGE_LIMIT) state.messages.splice(0, state.messages.length - MESSAGE_LIMIT);
     notify(true);
   }
 
@@ -1176,6 +1342,9 @@ function createAgentControl({ apiKey, model, generate, run }) {
     const now = Date.now();
     return {
       configured: secret.length >= 20,
+      problemId: state.problemId || null,
+      problemType: normalizeProblemType(state.problemType, state.fileName),
+      fileName: canonicalFileName(state.problemType, state.fileName),
       phase: state.phase,
       step: state.step,
       attempt: state.attempt,
@@ -1253,7 +1422,12 @@ function createAgentControl({ apiKey, model, generate, run }) {
   }
 
   async function reviewCases() {
-    const verdict = await talk('review', { statement: state.statement, cases: state.cases });
+    const verdict = await talk('review', {
+      statement: state.statement,
+      cases: state.cases,
+      problemType: state.problemType,
+      fileName: state.fileName,
+    });
     const ok = verdict.ok === true;
     const reason = clip(verdict.reason, 1_000);
     const repairedCases = validCases(verdict.cases)
@@ -1274,7 +1448,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
   }
 
   async function buildHarnessIfSupported() {
-    if (!talk.supportsHarness) return;
+    if (!talk.supportsHarness || state.problemType !== 'cpp') return;
     state.step = 'harness';
     say(`Building the main() test wrapper around ${state.entry}() for the sample format.`);
     try {
@@ -1284,9 +1458,11 @@ function createAgentControl({ apiKey, model, generate, run }) {
         entry: state.entry,
         signature: state.signature,
         format: state.format,
+        problemType: state.problemType,
+        fileName: state.fileName,
       });
-      const formatted = cleanSource(wrapped && wrapped.source);
-      if (validSource(formatted, secret) && sourceHasEntry(formatted, state.entry)) {
+      const formatted = cleanSource(wrapped && wrapped.source, state.problemType);
+      if (validSource(formatted, secret, state.problemType) && sourceHasEntry(formatted, state.entry)) {
         state.source = formatted;
         notify(true);
       }
@@ -1298,6 +1474,71 @@ function createAgentControl({ apiKey, model, generate, run }) {
   async function executeCurrentCases() {
     state.step = 'test';
     notify(true);
+    if (state.problemType !== 'cpp') {
+      const started = Date.now();
+      const syntax = await checkSyntax(state.problemType, state.source);
+      if (!syntax.ok) {
+        const result = {
+          status: 'compile_error',
+          compile: { ok: false, stderr: syntax.stderr || 'Syntax check failed' },
+          cases: state.cases.map(() => ({ status: 'idle', actual: '', timeMs: 0, reason: null })),
+        };
+        const report = formatRun(result);
+        noteOutput(report);
+        state.failure = report;
+        return { ok: false, fatal: false, result, passedCount: 0 };
+      }
+      const verified = await talk('verify', {
+        statement: state.statement,
+        cases: state.cases,
+        source: state.source,
+        problemType: state.problemType,
+        fileName: state.fileName,
+        stageLabel: `verifying ${TYPE_LABELS[state.problemType] || state.problemType} syntax & logic`,
+      });
+      const elapsed = Math.max(1, Date.now() - started);
+      const perCaseMs = Math.max(1, Math.round(elapsed / Math.max(1, state.cases.length)));
+      const verifiedCases = Array.isArray(verified && verified.cases) ? verified.cases : [];
+      const overallOk = verified && verified.ok === true;
+      const reasonText = clip(verified && verified.reason, 1_000);
+      state.cases = state.cases.map((item, idx) => {
+        const vItem = verifiedCases[idx];
+        const statusRaw = vItem && typeof vItem.status === 'string' ? vItem.status.toLowerCase() : '';
+        const passed = statusRaw === 'pass' || (overallOk && statusRaw !== 'fail');
+        const actual = vItem && typeof vItem.actual === 'string' ? sanitizeTextField(vItem.actual) : passed ? item.expected : '';
+        return {
+          input: item.input,
+          expected: item.expected,
+          actual,
+          stderr: !passed && reasonText ? reasonText : '',
+          reason: null,
+          timeMs: perCaseMs,
+          status: passed ? 'pass' : 'fail',
+        };
+      });
+      const passedCount = state.cases.filter((item) => item.status === 'pass').length;
+      const allPassed = overallOk && passedCount === state.cases.length;
+      const result = {
+        status: 'ran',
+        compile: { ok: true, stderr: '' },
+        cases: state.cases,
+      };
+      const reportLines = [
+        `$ syntax-check ${state.fileName}: OK`,
+        reasonText ? `logic check: ${reasonText}` : '',
+        formatRun(result),
+      ].filter(Boolean);
+      const report = reportLines.join('\n');
+      noteOutput(report);
+      state.failure = report;
+      return {
+        ok: allPassed,
+        fatal: false,
+        result,
+        passedCount,
+      };
+    }
+
     let result;
     try {
       result = await run(state.source, state.cases);
@@ -1345,6 +1586,8 @@ function createAgentControl({ apiKey, model, generate, run }) {
       format: state.format,
       cases: state.cases,
       hint: userHint,
+      problemType: state.problemType,
+      fileName: state.fileName,
     });
     if (!validCases(made && made.cases)) refuse(502, 'The model reply was not usable');
     const seen = new Set(state.cases.map((item) => item.input.trim()));
@@ -1374,7 +1617,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
       state.casesVerified = false;
     }
 
-    if (state.source && validSource(state.source, secret)) {
+    if (state.source && validSource(state.source, secret, state.problemType)) {
       const check = await executeCurrentCases();
       if (check.fatal) return;
       if (check.ok) {
@@ -1383,8 +1626,9 @@ function createAgentControl({ apiKey, model, generate, run }) {
         say(`All ${state.cases.length} test cases passed.`);
         return;
       }
+      const targetDesc = state.problemType === 'cpp' ? `${state.entry}()` : state.fileName;
       say(
-        `${check.passedCount}/${state.cases.length} passed on the expanded test suite. Updating ${state.entry}() to handle the failing case.`,
+        `${check.passedCount}/${state.cases.length} passed on the expanded test suite. Updating ${targetDesc} to handle the failing case.`,
       );
       state.hint = userHint || 'Fix the solution or input parser so all existing and newly added edge cases pass.';
       await writeAndRun('retry');
@@ -1395,14 +1639,19 @@ function createAgentControl({ apiKey, model, generate, run }) {
   }
 
   async function writeAndRun(task) {
-    if (task === 'solve' && !state.source) {
+    if (task === 'solve' && !state.source && state.problemType === 'cpp') {
       await buildHarnessIfSupported();
     }
+    const langLabel = TYPE_LABELS[state.problemType] || 'C++17';
     for (let attempt = 1; attempt <= MAX_APPROACHES; attempt += 1) {
       let fixes = 0;
       state.attempt = attempt;
       state.step = 'solve';
-      say(`Writing C++17 solution inside ${state.entry}() (attempt ${attempt}/${MAX_APPROACHES})…`);
+      say(
+        state.problemType === 'cpp'
+          ? `Writing C++17 solution inside ${state.entry}() (attempt ${attempt}/${MAX_APPROACHES})…`
+          : `Writing ${langLabel} solution in ${state.fileName} (attempt ${attempt}/${MAX_APPROACHES})…`,
+      );
       const hint = state.pendingHint || state.hint;
       state.pendingHint = '';
       const written = await talk(task, {
@@ -1414,16 +1663,18 @@ function createAgentControl({ apiKey, model, generate, run }) {
         entry: state.entry,
         signature: state.signature,
         format: state.format,
+        problemType: state.problemType,
+        fileName: state.fileName,
         stageLabel:
           attempt > 1
             ? `solving (attempt ${attempt}/${MAX_APPROACHES})`
             : THINK_LABELS[task] || 'solving',
       });
       task = 'retry';
-      const formatted = cleanSource(written && written.source);
-      if (!validSource(formatted, secret)) refuse(502, 'The model reply was not usable');
+      const formatted = cleanSource(written && written.source, state.problemType);
+      if (!validSource(formatted, secret, state.problemType)) refuse(502, 'The model reply was not usable');
       state.source = formatted;
-      if (!sourceHasEntry(state.source, state.entry)) {
+      if (state.problemType === 'cpp' && !sourceHasEntry(state.source, state.entry)) {
         say(`Moving the algorithm into ${state.entry}() so main() stays only the test wrapper.`);
         const shaped = await talk('fix', {
           source: state.source,
@@ -1432,9 +1683,11 @@ function createAgentControl({ apiKey, model, generate, run }) {
           signature: state.signature,
           format: state.format,
           cases: state.cases,
+          problemType: state.problemType,
+          fileName: state.fileName,
         });
-        const shapedClean = cleanSource(shaped && shaped.source);
-        if (!validSource(shapedClean, secret) || !sourceHasEntry(shapedClean, state.entry)) {
+        const shapedClean = cleanSource(shaped && shaped.source, state.problemType);
+        if (!validSource(shapedClean, secret, state.problemType) || !sourceHasEntry(shapedClean, state.entry)) {
           state.phase = 'needs_human';
           say(`I could not split this into ${state.entry}() and a main() test wrapper. Tell me how you want it structured.`);
           return;
@@ -1451,9 +1704,14 @@ function createAgentControl({ apiKey, model, generate, run }) {
           signature: state.signature,
           format: state.format,
           cases: state.cases,
+          problemType: state.problemType,
+          fileName: state.fileName,
         });
-        const dehardcodedClean = cleanSource(dehardcoded && dehardcoded.source);
-        if (validSource(dehardcodedClean, secret) && sourceHasEntry(dehardcodedClean, state.entry)) {
+        const dehardcodedClean = cleanSource(dehardcoded && dehardcoded.source, state.problemType);
+        if (
+          validSource(dehardcodedClean, secret, state.problemType) &&
+          (state.problemType !== 'cpp' || sourceHasEntry(dehardcodedClean, state.entry))
+        ) {
           state.source = dehardcodedClean;
         }
       }
@@ -1462,7 +1720,11 @@ function createAgentControl({ apiKey, model, generate, run }) {
         state.approach = nextApproach;
         say(state.approach, 'plan');
       }
-      say(`Wrote ${state.entry}() and the main() test wrapper into the editor (attempt ${attempt}/${MAX_APPROACHES}).`);
+      say(
+        state.problemType === 'cpp'
+          ? `Wrote ${state.entry}() and the main() test wrapper into the editor (attempt ${attempt}/${MAX_APPROACHES}).`
+          : `Wrote ${state.fileName} into the editor tab (attempt ${attempt}/${MAX_APPROACHES}). Running syntax & logic check…`,
+      );
 
       while (fixes < MAX_COMPILE_FIXES) {
         const check = await executeCurrentCases();
@@ -1470,25 +1732,36 @@ function createAgentControl({ apiKey, model, generate, run }) {
         const { result, passedCount } = check;
         if (result.status === 'compile_error') {
           fixes += 1;
-          say(`Compile failed. Repairing syntax (${fixes}/${MAX_COMPILE_FIXES}).`);
+          say(
+            state.problemType === 'cpp'
+              ? `Compile failed. Repairing syntax (${fixes}/${MAX_COMPILE_FIXES}).`
+              : `Syntax check failed in ${state.fileName}. Repairing syntax (${fixes}/${MAX_COMPILE_FIXES}).`,
+          );
           const fixed = await talk('fix', {
             source: state.source,
+            statement: state.statement,
             failure: result.compile && result.compile.stderr,
             entry: state.entry,
             signature: state.signature,
             format: state.format,
             cases: state.cases,
+            problemType: state.problemType,
+            fileName: state.fileName,
             stageLabel: `repairing syntax (${fixes}/${MAX_COMPILE_FIXES})`,
           });
-          const fixedClean = cleanSource(fixed && fixed.source);
-          if (!validSource(fixedClean, secret)) refuse(502, 'The model reply was not usable');
+          const fixedClean = cleanSource(fixed && fixed.source, state.problemType);
+          if (!validSource(fixedClean, secret, state.problemType)) refuse(502, 'The model reply was not usable');
           state.source = fixedClean;
           continue;
         }
         if (check.ok) {
           state.phase = 'solved';
           state.step = 'done';
-          say(`All ${state.cases.length} test case${state.cases.length === 1 ? '' : 's'} passed.`);
+          say(
+            state.problemType === 'cpp'
+              ? `All ${state.cases.length} test case${state.cases.length === 1 ? '' : 's'} passed.`
+              : `Syntax and logic verified across all ${state.cases.length} scenario${state.cases.length === 1 ? '' : 's'} in ${state.fileName}.`,
+          );
           return;
         }
         if (state.stopForCases) {
@@ -1537,12 +1810,12 @@ function createAgentControl({ apiKey, model, generate, run }) {
         );
         state.hint =
           state.pendingHint ||
-          `Inspect the failing test cases (${failedSummary}) against the problem statement to see what edge case, boundary condition, or parsing detail was missed, then fix the algorithm.`;
+          `Inspect the failing test cases (${failedSummary}) against the problem statement to see what edge case, boundary condition, or logic detail was missed, then fix the solution.`;
         break;
       }
       if (fixes >= MAX_COMPILE_FIXES && state.phase !== 'solved') {
         state.phase = 'needs_human';
-        say('It still does not compile after 3 repairs. Send what you want changed.');
+        say('It still has syntax errors after 3 repairs. Send what you want changed.');
         return;
       }
     }
@@ -1556,6 +1829,9 @@ function createAgentControl({ apiKey, model, generate, run }) {
     } else if (state.running) {
       busy();
     }
+    state.problemId = '';
+    state.problemType = 'cpp';
+    state.fileName = 'main.cpp';
     state.phase = 'idle';
     state.step = 'idle';
     state.attempt = 0;
@@ -1588,6 +1864,70 @@ function createAgentControl({ apiKey, model, generate, run }) {
     return snapshot();
   }
 
+  function loadHistoryItem(item) {
+    if (!item || typeof item !== 'object') refuse(400, 'Invalid history item');
+    if (state.running && activeAbort) {
+      activeAbort.abort();
+      activeAbort = null;
+      state.running = false;
+    } else if (state.running) {
+      busy();
+    }
+    state.problemId = typeof item.id === 'string' && item.id ? item.id : crypto.randomUUID();
+    state.problemType = normalizeProblemType(item.problemType, item.fileName);
+    state.fileName = canonicalFileName(state.problemType, item.fileName);
+    const validPhases = new Set(['idle', 'working', 'needs_human', 'solved', 'blocked']);
+    state.phase = validPhases.has(item.phase) && item.phase !== 'working' ? item.phase : 'solved';
+    state.step = 'done';
+    state.attempt = 1;
+    state.startedAt = null;
+    state.elapsedMs = 0;
+    state.title = clip(sanitizeTextField(item.title), 160);
+    state.statement = clip(sanitizeTextField(item.statement), 12_000);
+    state.entry = entryFunction(item.entry || 'solve');
+    state.signature = clip(sanitizeTextField(item.signature), 200);
+    state.format = clip(sanitizeTextField(item.format), 1_000);
+    state.casesFromProblem = true;
+    state.casesVerified = true;
+    state.cases = Array.isArray(item.cases)
+      ? item.cases.slice(0, CASE_LIMIT).map((raw) => {
+          const clean = sanitizeCaseItem(raw);
+          return {
+            input: clean.input,
+            expected: clean.expected,
+            actual: typeof raw.actual === 'string' ? sanitizeTextField(raw.actual) : '',
+            stderr: typeof raw.stderr === 'string' ? sanitizeTextField(raw.stderr) : '',
+            reason: raw.reason || null,
+            timeMs: typeof raw.timeMs === 'number' ? raw.timeMs : 0,
+            status: raw.status === 'pass' || raw.status === 'fail' ? raw.status : 'idle',
+          };
+        })
+      : [];
+    state.images = [];
+    state.source = typeof item.source === 'string' ? cleanSource(item.source, state.problemType) : '';
+    state.approach = clip(sanitizeTextField(item.approach), 1_000);
+    state.hint = '';
+    state.pendingHint = '';
+    state.stopForCases = false;
+    state.messages = Array.isArray(item.messages)
+      ? item.messages.slice(-MESSAGE_LIMIT).map((msg) => ({
+          role: msg && msg.role === 'user' ? 'user' : 'assistant',
+          text: redact(clip(msg && msg.text, 4_000), secret),
+          kind: msg && msg.kind ? msg.kind : msg && msg.role === 'user' ? 'user' : 'step',
+        }))
+      : [];
+    state.output = clip(typeof item.output === 'string' ? item.output : '', OUTPUT_LIMIT);
+    state.failure = '';
+    state.activity = '';
+    state.thinking = '';
+    state.thinkingLabel = '';
+    state.drafting = '';
+    state.draftChars = 0;
+    state.thoughtLog = [];
+    notify(true);
+    return snapshot();
+  }
+
   async function begin(input) {
     if (secret.length < 20) refuse(503, 'Agent is not configured');
     if (state.running) busy();
@@ -1598,6 +1938,9 @@ function createAgentControl({ apiKey, model, generate, run }) {
     if (!text && images.length === 0) refuse(400, 'Send a question or an image');
     const runAbort = new AbortController();
     activeAbort = runAbort;
+    state.problemId = crypto.randomUUID();
+    state.problemType = 'cpp';
+    state.fileName = 'main.cpp';
     state.running = true;
     state.startedAt = Date.now();
     state.elapsedMs = 0;
@@ -1641,18 +1984,29 @@ function createAgentControl({ apiKey, model, generate, run }) {
         source: clip(input.source, SOURCE_LIMIT),
       });
       state.title = clip(sanitizeTextField(found.title), 160);
+      state.problemType = normalizeProblemType(found.problemType, found.fileName);
+      state.fileName = canonicalFileName(state.problemType, found.fileName);
       state.statement = clip(sanitizeTextField(found.statement), 12_000);
       state.casesFromProblem = found.casesFromProblem === true;
       if (!state.statement) refuse(502, 'The problem read reply did not include a statement.');
       say(state.statement, 'problem');
-      state.entry = entryFunction(found.functionName);
-      state.signature = entrySignature(state.entry, found.signature);
+      state.entry = state.problemType === 'cpp' ? entryFunction(found.functionName) : clip(sanitizeTextField(found.functionName), 64) || state.fileName;
+      state.signature =
+        state.problemType === 'cpp'
+          ? entrySignature(state.entry, found.signature)
+          : clip(sanitizeTextField(found.signature), 200) || `${TYPE_LABELS[state.problemType] || state.problemType} (${state.fileName})`;
       state.format = clip(sanitizeTextField(found.format), 1_000);
-      say(
-        state.entry === 'solve'
-          ? `Target: void solve() using cin/cout directly with #include <bits/stdc++.h>.`
-          : `Target template: ${state.entry}() (${state.signature}). main() will parse the test input and format the output.`,
-      );
+      if (state.problemType === 'cpp') {
+        say(
+          state.entry === 'solve'
+            ? `Target: void solve() using cin/cout directly with #include <bits/stdc++.h>.`
+            : `Target template: ${state.entry}() (${state.signature}). main() will parse the test input and format the output.`,
+        );
+      } else {
+        say(
+          `Detected ${TYPE_LABELS[state.problemType] || state.problemType} problem — opening dedicated tab ${state.fileName} with syntax & logic verification.`,
+        );
+      }
       state.step = 'cases';
       if (state.casesFromProblem && validCases(found.cases)) {
         state.cases = found.cases.map((rawItem) => {
@@ -1667,7 +2021,11 @@ function createAgentControl({ apiKey, model, generate, run }) {
             status: 'idle',
           };
         });
-        say(`Loaded ${state.cases.length} sample case${state.cases.length === 1 ? '' : 's'} (bare-bones stdin format). Verifying by hand.`);
+        say(
+          state.problemType === 'cpp'
+            ? `Loaded ${state.cases.length} sample case${state.cases.length === 1 ? '' : 's'} (bare-bones stdin format). Verifying by hand.`
+            : `Loaded ${state.cases.length} verification scenario${state.cases.length === 1 ? '' : 's'} from the problem. Verifying by hand.`,
+        );
         const checked = await reviewCases();
         if (!checked.ok) {
           state.phase = 'blocked';
@@ -1680,8 +2038,18 @@ function createAgentControl({ apiKey, model, generate, run }) {
         }
         state.casesVerified = true;
       } else {
-        say('No sample cases in the problem. Generating bare-bones test cases from the statement.');
-        const made = await talk('makeCases', { statement: state.statement, format: state.format, cases: [] });
+        say(
+          state.problemType === 'cpp'
+            ? 'No sample cases in the problem. Generating bare-bones test cases from the statement.'
+            : `No sample cases in the problem. Generating ${TYPE_LABELS[state.problemType] || state.problemType} verification scenarios from the statement.`,
+        );
+        const made = await talk('makeCases', {
+          statement: state.statement,
+          format: state.format,
+          cases: [],
+          problemType: state.problemType,
+          fileName: state.fileName,
+        });
         if (!validCases(made.cases)) refuse(502, 'The model reply was not usable');
         state.cases = made.cases.slice(0, 4).map((rawItem) => {
           const item = sanitizeCaseItem(rawItem);
@@ -1702,6 +2070,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
         say(state.approach, 'plan');
       }
       await writeAndRun('solve');
+      persistHistory();
       return snapshot();
     } catch (error) {
       if (runAbort.signal.aborted || (error && error.code === 'ABORTED')) {
@@ -1709,6 +2078,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
       }
       state.phase = state.phase === 'working' ? 'needs_human' : state.phase;
       say(error.status ? error.message : 'The agent stopped');
+      persistHistory();
       if (error.status && error.status < 500) throw error;
       return snapshot();
     } finally {
@@ -1771,8 +2141,8 @@ function createAgentControl({ apiKey, model, generate, run }) {
       say('I will not fit the program to those cases. Edit the expected output in the Test cases panel or tell me which case is wrong, then retry.');
       return snapshot();
     }
-    if (input && typeof input.source === 'string' && validSource(input.source, secret)) {
-      state.source = cleanSource(input.source);
+    if (input && typeof input.source === 'string' && validSource(input.source, secret, state.problemType)) {
+      state.source = cleanSource(input.source, state.problemType);
     }
     if (input && Array.isArray(input.cases) && validCases(input.cases)) {
       let anyChanged = false;
@@ -1816,20 +2186,39 @@ function createAgentControl({ apiKey, model, generate, run }) {
           image: state.images[0] || null,
           images: state.images,
           source: state.source,
+          problemType: state.problemType,
+          fileName: state.fileName,
         });
         if (merged && merged.title) state.title = clip(sanitizeTextField(merged.title), 160);
+        if (merged && (merged.problemType || merged.fileName)) {
+          const nextType = normalizeProblemType(merged.problemType, merged.fileName);
+          const nextFile = canonicalFileName(nextType, merged.fileName);
+          if (nextType !== state.problemType) {
+            state.problemType = nextType;
+            state.fileName = nextFile;
+            state.source = '';
+          }
+        }
         if (merged && merged.statement) {
           state.statement = clip(sanitizeTextField(merged.statement), 12_000);
           say(state.statement, 'problem');
         }
         if (merged && merged.functionName) {
-          const nextEntry = entryFunction(merged.functionName);
+          const nextEntry =
+            state.problemType === 'cpp'
+              ? entryFunction(merged.functionName)
+              : clip(sanitizeTextField(merged.functionName), 64) || state.fileName;
           if (nextEntry !== state.entry) {
             state.entry = nextEntry;
             state.source = '';
           }
         }
-        if (merged && merged.signature) state.signature = entrySignature(state.entry, merged.signature);
+        if (merged && merged.signature) {
+          state.signature =
+            state.problemType === 'cpp'
+              ? entrySignature(state.entry, merged.signature)
+              : clip(sanitizeTextField(merged.signature), 200) || state.signature;
+        }
         if (merged && merged.format) state.format = clip(sanitizeTextField(merged.format), 1_000);
         if (merged && merged.casesFromProblem && validCases(merged.cases)) {
           const seen = new Set(state.cases.map((item) => item.input.trim()));
@@ -1856,6 +2245,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
         state.hint = text || 'Use all combined problem parts, constraints, and sample cases.';
         await writeAndRun(state.source ? 'retry' : 'solve');
         if (state.phase === 'working') state.phase = 'needs_human';
+        persistHistory();
         return snapshot();
       } catch (error) {
         if (runAbort.signal.aborted || (error && error.code === 'ABORTED')) {
@@ -1863,6 +2253,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
         }
         state.phase = 'needs_human';
         say(error.status ? error.message : 'The agent stopped');
+        persistHistory();
         if (error.status && error.status < 500) throw error;
         return snapshot();
       } finally {
@@ -1885,6 +2276,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
       try {
         await addCasesAndTest(userMsg);
         if (state.phase === 'working') state.phase = 'needs_human';
+        persistHistory();
         return snapshot();
       } catch (error) {
         if (runAbort.signal.aborted || (error && error.code === 'ABORTED')) {
@@ -1892,6 +2284,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
         }
         state.phase = 'needs_human';
         say(error.status ? error.message : 'The agent stopped');
+        persistHistory();
         if (error.status && error.status < 500) throw error;
         return snapshot();
       } finally {
@@ -1915,6 +2308,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
     try {
       await writeAndRun('retry');
       if (state.phase === 'working') state.phase = 'needs_human';
+      persistHistory();
       return snapshot();
     } catch (error) {
       if (runAbort.signal.aborted || (error && error.code === 'ABORTED')) {
@@ -1922,6 +2316,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
       }
       state.phase = 'needs_human';
       say(error.status ? error.message : 'The agent stopped');
+      persistHistory();
       if (error.status && error.status < 500) throw error;
       return snapshot();
     } finally {
@@ -1936,12 +2331,108 @@ function createAgentControl({ apiKey, model, generate, run }) {
     if (secret.length < 20) refuse(503, 'Agent is not configured');
     const text = clip(input && input.text, 4_000);
     if (!text) refuse(400, 'Ask a question');
-    const answer = await talk('ask', { text, source: clip(input.source, SOURCE_LIMIT) });
-    const reply = redact(clip(answer.text, 4_000), secret);
-    return { configured: true, text: reply || 'No answer.' };
+    const fileName = input && input.fileName ? canonicalFileName(input.problemType, input.fileName) : state.fileName;
+    const problemType = normalizeProblemType(input && input.problemType ? input.problemType : state.problemType, fileName);
+    const answer = await talk('ask', {
+      text,
+      source: clip(input.source, SOURCE_LIMIT),
+      problemType,
+      fileName,
+    });
+    const reply = redact(clip(answer.text, 4_000), secret) || 'No answer.';
+    if (state.problemId && state.phase !== 'idle') {
+      state.messages.push({ role: 'user', text: redact(text, secret), kind: 'user' });
+      state.messages.push({ role: 'assistant', text: reply, kind: 'step' });
+      if (state.messages.length > MESSAGE_LIMIT) {
+        state.messages.splice(0, state.messages.length - MESSAGE_LIMIT);
+      }
+      persistHistory();
+      notify(true);
+    }
+    return { configured: true, text: reply };
   }
 
-  return { begin, guide, ask, reset, snapshot, subscribe };
+  async function checkCode(input) {
+    const rawSource = clip(input && input.source, SOURCE_LIMIT);
+    const problemType = normalizeProblemType(
+      input && input.problemType ? input.problemType : state.problemType,
+      input && input.fileName ? input.fileName : state.fileName,
+    );
+    const fileName = canonicalFileName(problemType, input && input.fileName ? input.fileName : state.fileName);
+    if (!rawSource.trim()) refuse(400, 'Source code is empty');
+    const syntax = await checkSyntax(problemType, rawSource);
+    const mode = input && input.mode === 'tests' ? 'tests' : 'program';
+    const rawCases = Array.isArray(input && input.cases) ? input.cases.slice(0, CASE_LIMIT) : [];
+    if (!syntax.ok) {
+      return {
+        status: 'compile_error',
+        compile: { ok: false, stderr: syntax.stderr || 'Syntax check failed' },
+        program: null,
+        cases: rawCases.map(() => ({ status: 'idle', actual: '', timeMs: 0, reason: null })),
+      };
+    }
+    if (mode === 'tests' && rawCases.length > 0 && secret.length >= 20) {
+      const started = Date.now();
+      const verified = await talk('verify', {
+        statement: state.statement || `Verify ${fileName} against the provided test cases.`,
+        cases: rawCases.map(sanitizeCaseItem),
+        source: rawSource,
+        problemType,
+        fileName,
+      });
+      const elapsed = Math.max(1, Date.now() - started);
+      const perCaseMs = Math.max(1, Math.round(elapsed / Math.max(1, rawCases.length)));
+      const verifiedCases = Array.isArray(verified && verified.cases) ? verified.cases : [];
+      const overallOk = verified && verified.ok === true;
+      const reasonText = clip(verified && verified.reason, 1_000);
+      const cases = rawCases.map((item, idx) => {
+        const vItem = verifiedCases[idx];
+        const statusRaw = vItem && typeof vItem.status === 'string' ? vItem.status.toLowerCase() : '';
+        const passed = statusRaw === 'pass' || (overallOk && statusRaw !== 'fail');
+        const actual =
+          vItem && typeof vItem.actual === 'string'
+            ? sanitizeTextField(vItem.actual)
+            : passed
+              ? String(item.expected || '')
+              : '';
+        return {
+          status: passed ? 'pass' : 'fail',
+          actual,
+          stderr: !passed && reasonText ? reasonText : '',
+          timeMs: perCaseMs,
+          reason: null,
+          exitCode: passed ? 0 : 1,
+        };
+      });
+      return {
+        status: 'ran',
+        compile: { ok: true, stderr: reasonText },
+        program: null,
+        cases,
+      };
+    }
+    return {
+      status: 'ran',
+      compile: { ok: true, stderr: '' },
+      program: {
+        stdout: `Syntax check passed for ${fileName} (${TYPE_LABELS[problemType] || problemType}).`,
+        stderr: '',
+        timeMs: 1,
+        reason: null,
+        exitCode: 0,
+      },
+      cases: rawCases.map((item) => ({
+        status: 'pass',
+        actual: String(item.expected || 'Syntax OK'),
+        stderr: '',
+        timeMs: 1,
+        reason: null,
+        exitCode: 0,
+      })),
+    };
+  }
+
+  return { begin, guide, ask, reset, snapshot, subscribe, loadHistoryItem, checkCode };
 }
 
 module.exports = {
@@ -1958,6 +2449,9 @@ module.exports = {
   sanitizeCaseItem,
   sourceHasEntry,
   cleanSource,
+  validSource,
+  normalizeProblemType,
+  canonicalFileName,
   wantsMoreCases,
   MODEL,
 };

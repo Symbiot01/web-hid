@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   MODEL,
+  canonicalFileName,
   cleanSource,
   createAgentControl,
   createGemini,
@@ -11,11 +12,14 @@ const {
   entrySignature,
   extractDraftPreview,
   imageOk,
+  normalizeProblemType,
   parseModelJson,
   sanitizeCaseItem,
   sourceHasEntry,
   wantsMoreCases,
 } = require('./agent');
+const { checkSyntax } = require('./syntaxCheck');
+const { createHistoryStore } = require('./history');
 const { createApp } = require('./http');
 const { createSessionToken, COOKIE_NAME } = require('./auth');
 
@@ -750,5 +754,253 @@ test('removes hardcoded test-case checks and repairs miscalculated synthetic cas
   assert.equal(view.phase, 'solved');
   assert.equal(view.cases[0].expected, 'zzzzz\n');
   assert.equal(view.source.includes('aaaaz'), false);
+});
+
+test('syntaxCheck validates Python, SQL, Bash, Dockerfile, YAML, and JavaScript', async () => {
+  assert.equal(normalizeProblemType('sql', 'query.sql'), 'sql');
+  assert.equal(canonicalFileName('sql', '../../../etc/passwd'), 'query.sql');
+  assert.equal(canonicalFileName('dockerfile', 'Dockerfile.prod'), 'Dockerfile');
+  assert.equal(canonicalFileName('python', 'hack.py'), 'solution.py');
+  assert.equal(canonicalFileName('unknown_lang', 'foo.bar'), 'main.cpp');
+
+  const sqlOk = await checkSyntax(
+    'sql',
+    'WITH ranked AS (SELECT id, DENSE_RANK() OVER (ORDER BY salary DESC) AS rnk FROM Employee) SELECT id FROM ranked WHERE rnk <= 3;',
+  );
+  assert.equal(sqlOk.ok, true);
+
+  const sqlBad = await checkSyntax('sql', 'SELECT FROM Employee WHERE (id = 1;');
+  assert.equal(sqlBad.ok, false);
+
+  const dockerOk = await checkSyntax(
+    'dockerfile',
+    'FROM node:20-alpine AS build\nWORKDIR /app\nCOPY package*.json ./\nRUN npm ci\nCOPY . .\nCMD ["node", "index.js"]\n',
+  );
+  assert.equal(dockerOk.ok, true);
+
+  const dockerBad = await checkSyntax('dockerfile', 'RUN echo "missing FROM"\n');
+  assert.equal(dockerBad.ok, false);
+
+  const bashOk = await checkSyntax('bash', '#!/usr/bin/env bash\nset -euo pipefail\nfor x in 1 2 3; do echo "$x"; done\n');
+  assert.equal(bashOk.ok, true);
+
+  const bashBad = await checkSyntax('bash', '#!/usr/bin/env bash\nif [ -z "$x" ]; then echo "unclosed\n');
+  assert.equal(bashBad.ok, false);
+
+  const pyOk = await checkSyntax('python', 'def solve(nums: list[int]) -> int:\n    return sum(nums)\n');
+  assert.equal(pyOk.ok, true);
+
+  const pyBad = await checkSyntax('python', 'def solve(nums):\n    return sum(nums\n');
+  assert.equal(pyBad.ok, false);
+
+  const jsOk = await checkSyntax('javascript', 'function solve(a, b) { return a + b; }\n');
+  assert.equal(jsOk.ok, true);
+
+  const jsBad = await checkSyntax('javascript', 'function solve(a, { return a; }\n');
+  assert.equal(jsBad.ok, false);
+});
+
+test('multi-domain agent solves SQL and Dockerfile problems without g++ and saves to history store', async () => {
+  const history = createHistoryStore({ dbPath: ':memory:' });
+  const calls = [];
+  let gppCalled = false;
+
+  const steps = {
+    identify: [
+      {
+        title: 'Department Top Three Salaries',
+        problemType: 'sql',
+        fileName: 'query.sql',
+        statement: 'Find employees who earn the top 3 unique salaries in each department.',
+        casesFromProblem: true,
+        cases: [
+          {
+            input: 'Employee(id=1, name=Joe, salary=85000, departmentId=1), Department(id=1, name=IT)',
+            expected: 'IT | Joe | 85000',
+          },
+        ],
+        plan: 'Use DENSE_RANK() partitioned by departmentId ordered by salary DESC.',
+        functionName: 'query',
+        signature: 'SQL SELECT query (query.sql)',
+        format: 'Department, Employee, Salary',
+      },
+    ],
+    review: [{ ok: true, reason: '' }],
+    solve: [
+      {
+        source: 'SELECT FROM Employee WHERE (;',
+        approach: 'Broken SQL first to test syntax repair.',
+      },
+    ],
+    fix: [
+      {
+        source:
+          'WITH Ranked AS (\n  SELECT d.name AS Department, e.name AS Employee, e.salary AS Salary,\n         DENSE_RANK() OVER (PARTITION BY e.departmentId ORDER BY e.salary DESC) AS rnk\n  FROM Employee e\n  JOIN Department d ON e.departmentId = d.id\n)\nSELECT Department, Employee, Salary FROM Ranked WHERE rnk <= 3;\n',
+      },
+    ],
+    verify: [
+      {
+        ok: true,
+        reason: 'DENSE_RANK properly handles ties and filters top 3 per department.',
+        cases: [
+          {
+            input: 'Employee(id=1, name=Joe, salary=85000, departmentId=1), Department(id=1, name=IT)',
+            expected: 'IT | Joe | 85000',
+            actual: 'IT | Joe | 85000',
+            status: 'pass',
+          },
+        ],
+      },
+    ],
+    ask: [{ text: 'DENSE_RANK avoids skipping ranks on ties.' }],
+  };
+
+  const agent = createAgentControl({
+    apiKey: KEY,
+    onSaveHistory: (record) => history.save(record),
+    generate: async (task) => {
+      calls.push(task);
+      const next = steps[task] && steps[task].shift();
+      if (!next) throw new Error(`unexpected task ${task}`);
+      return next;
+    },
+    run: async () => {
+      gppCalled = true;
+      return passRun();
+    },
+  });
+
+  const view = await agent.begin({ text: 'Write a SQL query for Department Top Three Salaries' });
+  assert.equal(gppCalled, false);
+  assert.equal(view.phase, 'solved');
+  assert.equal(view.problemType, 'sql');
+  assert.equal(view.fileName, 'query.sql');
+  assert.ok(calls.includes('fix'));
+  assert.ok(calls.includes('verify'));
+  assert.equal(view.cases[0].status, 'pass');
+
+  await agent.ask({
+    text: 'Why DENSE_RANK instead of RANK?',
+    source: view.source,
+    fileName: 'query.sql',
+    problemType: 'sql',
+  });
+
+  const listResult = history.list({ q: 'Department', type: 'sql' });
+  assert.equal(listResult.total, 1);
+  assert.equal(listResult.items[0].title, 'Department Top Three Salaries');
+  assert.equal(listResult.items[0].problemType, 'sql');
+  assert.equal(listResult.items[0].fileName, 'query.sql');
+
+  const detail = history.get(listResult.items[0].id);
+  assert.ok(detail);
+  assert.match(detail.source, /DENSE_RANK/);
+  assert.ok(detail.messages.some((m) => m.text.includes('Why DENSE_RANK')));
+  assert.ok(detail.messages.some((m) => m.text.includes('DENSE_RANK avoids skipping')));
+  history.close();
+});
+
+test('/api/history and /api/agent/check endpoints enforce auth, support search, and restore into IDE', async () => {
+  const sessionSecret = 's'.repeat(32);
+  const history = createHistoryStore({ dbPath: ':memory:' });
+  const saved = history.save({
+    id: '11111111-2222-3333-4444-555555555555',
+    title: 'Multi-Stage Node Dockerfile',
+    problemType: 'dockerfile',
+    fileName: 'Dockerfile',
+    entry: 'Dockerfile',
+    signature: 'Dockerfile (multi-stage)',
+    format: 'Container build checks',
+    phase: 'solved',
+    statement: 'Create a production multi-stage Dockerfile for a Node 20 app.',
+    approach: 'Use node:20-alpine builder and runner stages with non-root user.',
+    source: 'FROM node:20-alpine AS build\nWORKDIR /app\nCOPY . .\nUSER node\nCMD ["node", "server.js"]\n',
+    messages: [
+      { role: 'user', text: 'Build a Node Dockerfile', kind: 'user' },
+      { role: 'assistant', text: 'Solved in Dockerfile.', kind: 'step' },
+    ],
+    cases: [{ input: 'Non-root user check', expected: 'USER node', actual: 'USER node', status: 'pass', timeMs: 2 }],
+    output: '$ syntax-check Dockerfile: OK',
+  });
+  assert.ok(saved);
+
+  const app = createApp({
+    history,
+    config: {
+      gatePassword: 'g'.repeat(16),
+      sessionSecret,
+      nodeEnv: 'development',
+      trustProxy: false,
+      streamWhepUrl: 'http://127.0.0.1:9/cam/whep',
+      streamSrtUrl: 'srt://127.0.0.1:9?streamid=publish:cam',
+      streamDeskSrtUrl: 'srt://127.0.0.1:9?streamid=publish:desk',
+      captureRtspCam: 'rtsp://127.0.0.1:9/cam',
+      bridgeToken: '',
+      lookcamPassword: '',
+      captureToken: '',
+      geminiApiKey: KEY,
+      geminiModel: MODEL,
+    },
+  });
+
+  const server = await new Promise((resolve) => {
+    const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
+  });
+  const { port } = server.address();
+  const cookie = `${COOKIE_NAME}=${encodeURIComponent(createSessionToken(sessionSecret))}`;
+
+  try {
+    const unauth = await fetch(`http://127.0.0.1:${port}/api/history`);
+    assert.equal(unauth.status, 401);
+
+    const listRes = await fetch(`http://127.0.0.1:${port}/api/history?q=Node&type=dockerfile`, {
+      headers: { cookie },
+    });
+    assert.equal(listRes.status, 200);
+    const listBody = await listRes.json();
+    assert.equal(listBody.total, 1);
+    assert.equal(listBody.items[0].fileName, 'Dockerfile');
+
+    const openRes = await fetch(
+      `http://127.0.0.1:${port}/api/history/11111111-2222-3333-4444-555555555555/open`,
+      {
+        method: 'POST',
+        headers: { cookie, 'Content-Type': 'application/json' },
+        body: '{}',
+      },
+    );
+    assert.equal(openRes.status, 200);
+    const openBody = await openRes.json();
+    assert.equal(openBody.ok, true);
+    assert.equal(openBody.view.fileName, 'Dockerfile');
+    assert.equal(openBody.view.problemType, 'dockerfile');
+
+    const checkRes = await fetch(`http://127.0.0.1:${port}/api/agent/check`, {
+      method: 'POST',
+      headers: { cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source: openBody.view.source,
+        problemType: 'dockerfile',
+        fileName: 'Dockerfile',
+        mode: 'program',
+      }),
+    });
+    assert.equal(checkRes.status, 200);
+    const checkBody = await checkRes.json();
+    assert.equal(checkBody.status, 'ran');
+    assert.equal(checkBody.compile.ok, true);
+
+    const delRes = await fetch(`http://127.0.0.1:${port}/api/history/11111111-2222-3333-4444-555555555555`, {
+      method: 'DELETE',
+      headers: { cookie },
+    });
+    assert.equal(delRes.status, 200);
+    const afterDel = await fetch(`http://127.0.0.1:${port}/api/history`, { headers: { cookie } });
+    const afterBody = await afterDel.json();
+    assert.equal(afterBody.total, 0);
+  } finally {
+    history.close();
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 

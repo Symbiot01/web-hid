@@ -8,6 +8,8 @@ import { SplitPane } from './SplitPane.tsx';
 import { TerminalPane, type BottomTab } from './TerminalPane.tsx';
 import {
   INITIAL_MAIN,
+  languageForFile,
+  problemTypeForFile,
   type AgentMessage,
   type AgentMode,
   type AgentPhase,
@@ -15,6 +17,7 @@ import {
   type AgentThoughtEntry,
   type AgentView,
   type EditorTab,
+  type ProblemType,
   type TestCase,
 } from './types.ts';
 import { useHidLink, type LiveMode } from './useHidLink.ts';
@@ -99,6 +102,8 @@ export function IdePage({ busy, onLogout }: Props) {
   const [mode, setMode] = useState<AgentMode>('agent');
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [agentPhase, setAgentPhase] = useState<AgentPhase>('idle');
+  const [agentProblemType, setAgentProblemType] = useState<ProblemType>('cpp');
+  const [agentFileName, setAgentFileName] = useState('main.cpp');
   const [agentStep, setAgentStep] = useState<AgentStep>('idle');
   const [agentAttempt, setAgentAttempt] = useState(0);
   const [agentMaxAttempts, setAgentMaxAttempts] = useState(3);
@@ -207,22 +212,29 @@ export function IdePage({ busy, onLogout }: Props) {
     const active = tabs.find((tab) => tab.id === activeTabId);
     const source = active?.value ?? '';
     const fileName = active?.name ?? 'main.cpp';
+    const tabProblemType = problemTypeForFile(fileName);
     const submitted = cases.map((item) => ({ id: item.id, input: item.input, expected: item.expected }));
     const seq = runSeq.current + 1;
     runSeq.current = seq;
     setRunning(kind);
-    const header = `$ g++ -std=c++17 -O2 -pipe -Wall -Wextra -o main ${fileName}`;
+    const header =
+      tabProblemType === 'cpp'
+        ? `$ g++ -std=c++17 -O2 -pipe -Wall -Wextra -o main ${fileName}`
+        : `$ syntax-check ${fileName} (${tabProblemType})`;
     setOutput((prev) => (prev ? `${prev}\n${header}\n` : `${header}\n`));
     try {
-      const response = await fetch('/api/runs', {
+      const endpoint = tabProblemType === 'cpp' ? '/api/runs' : '/api/agent/check';
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(
           kind === 'program'
-            ? { source, mode: 'program' }
+            ? { source, mode: 'program', problemType: tabProblemType, fileName }
             : {
                 source,
                 mode: 'tests',
+                problemType: tabProblemType,
+                fileName,
                 cases: submitted.map((item) => ({ input: item.input, expected: item.expected })),
               },
         ),
@@ -396,6 +408,8 @@ export function IdePage({ busy, onLogout }: Props) {
 
   const agentOutput = useRef('');
   const askPending = useRef(false);
+  const lastAppliedSourceRef = useRef<string | null>(null);
+  const lastAppliedFileRef = useRef<string | null>(null);
 
   function applyAgent(view: AgentView) {
     setAgentReady(view.configured);
@@ -411,7 +425,11 @@ export function IdePage({ busy, onLogout }: Props) {
     if (askPending.current) {
       return;
     }
+    const targetFileName = view.fileName || 'main.cpp';
+    const targetProblemType = view.problemType || problemTypeForFile(targetFileName);
     setAgentPhase(view.phase);
+    setAgentProblemType(targetProblemType);
+    setAgentFileName(targetFileName);
     setAgentStep(view.step ?? 'idle');
     setAgentAttempt(view.attempt ?? 0);
     setAgentMaxAttempts(view.maxAttempts ?? 3);
@@ -428,13 +446,67 @@ export function IdePage({ busy, onLogout }: Props) {
         kind: item.kind,
       })),
     );
-    if (typeof view.source === 'string' && view.source.length > 0) {
+    const hasNewSource = typeof view.source === 'string' && view.source.length > 0;
+    const fileChanged = view.phase !== 'idle' && targetFileName !== lastAppliedFileRef.current;
+    const sourceChanged = hasNewSource && view.source !== lastAppliedSourceRef.current;
+
+    if (hasNewSource && (sourceChanged || fileChanged)) {
+      const nextSource = view.source as string;
+      const deterministicId = targetFileName === 'main.cpp' ? 'main' : `tab-${targetFileName}`;
+      lastAppliedSourceRef.current = nextSource;
+      lastAppliedFileRef.current = targetFileName;
+      let chosenId = deterministicId;
       setTabs((prev) => {
-        const target = prev.find((tab) => tab.name === 'main.cpp') ?? prev.find((tab) => tab.id === activeTabId) ?? prev[0];
-        if (!target) return prev;
-        return prev.map((tab) => (tab.id === target.id ? { ...tab, value: view.source as string, dirty: true } : tab));
+        const existing = prev.find((tab) => tab.name === targetFileName);
+        if (existing) {
+          chosenId = existing.id;
+          return prev.map((tab) =>
+            tab.id === existing.id
+              ? { ...tab, value: nextSource, dirty: true, language: languageForFile(targetFileName) }
+              : tab,
+          );
+        }
+        chosenId = deterministicId;
+        return [
+          ...prev,
+          {
+            id: deterministicId,
+            name: targetFileName,
+            value: nextSource,
+            dirty: true,
+            language: languageForFile(targetFileName),
+          },
+        ];
       });
+      setActiveTabId(chosenId);
       setEditorView('editor');
+    } else if (!hasNewSource && fileChanged && targetFileName !== 'main.cpp') {
+      const deterministicId = `tab-${targetFileName}`;
+      lastAppliedFileRef.current = targetFileName;
+      let chosenId = deterministicId;
+      setTabs((prev) => {
+        const existing = prev.find((tab) => tab.name === targetFileName);
+        if (existing) {
+          chosenId = existing.id;
+          return prev;
+        }
+        chosenId = deterministicId;
+        return [
+          ...prev,
+          {
+            id: deterministicId,
+            name: targetFileName,
+            value: '',
+            dirty: false,
+            language: languageForFile(targetFileName),
+          },
+        ];
+      });
+      setActiveTabId(chosenId);
+      setEditorView('editor');
+    } else if (view.phase === 'idle') {
+      lastAppliedSourceRef.current = null;
+      lastAppliedFileRef.current = null;
     }
     if (Array.isArray(view.cases) && view.cases.length > 0) {
       setCases(
@@ -555,13 +627,18 @@ export function IdePage({ busy, onLogout }: Props) {
         askPending.current = true;
         setAgentPhase('working');
         setAgentStartedAt(Date.now());
-        setAgentActivity('Analyzing the open C++ file and preparing an answer…');
+        setAgentActivity(`Analyzing ${active?.name ?? 'main.cpp'} and preparing an answer…`);
         try {
           const response = await fetch('/api/agent/ask', {
             method: 'POST',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text, source: active?.value ?? '' }),
+            body: JSON.stringify({
+              text,
+              source: active?.value ?? '',
+              fileName: active?.name ?? 'main.cpp',
+              problemType: problemTypeForFile(active?.name ?? 'main.cpp'),
+            }),
           });
           const payload = (await response.json()) as { text?: string; error?: string };
           setMessages((prev) => [
@@ -721,6 +798,15 @@ export function IdePage({ busy, onLogout }: Props) {
               ) : (
                 <>
                   <Link
+                    to="/history"
+                    role="menuitem"
+                    className="ide-menu-item"
+                    style={{ textDecoration: 'none' }}
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    Solved History
+                  </Link>
+                  <Link
                     to="/tutorial"
                     role="menuitem"
                     className="ide-menu-item"
@@ -754,6 +840,8 @@ export function IdePage({ busy, onLogout }: Props) {
           <AgentPane
             mode={mode}
             phase={agentPhase}
+            problemType={agentProblemType}
+            fileName={agentFileName}
             step={agentStep}
             attempt={agentAttempt}
             maxAttempts={agentMaxAttempts}

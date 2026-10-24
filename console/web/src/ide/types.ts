@@ -1,8 +1,11 @@
+export type ProblemType = 'cpp' | 'python' | 'sql' | 'bash' | 'dockerfile' | 'yaml' | 'javascript';
+
 export type EditorTab = {
   id: string;
   name: string;
   value: string;
   dirty: boolean;
+  language?: string;
 };
 
 export type TestStatus = 'idle' | 'pass' | 'fail';
@@ -49,6 +52,9 @@ export type AgentThoughtEntry = {
 
 export type AgentView = {
   configured: boolean;
+  problemId?: string | null;
+  problemType?: ProblemType;
+  fileName?: string;
   phase: AgentPhase;
   step?: AgentStep;
   attempt?: number;
@@ -79,6 +85,38 @@ export type AgentView = {
   elapsedMs?: number;
   thoughtLog?: AgentThoughtEntry[];
   running?: boolean;
+};
+
+export function languageForFile(name: string): string {
+  const lower = (name || '').toLowerCase();
+  if (lower.endsWith('.py')) return 'python';
+  if (lower.endsWith('.sql')) return 'sql';
+  if (lower.endsWith('.sh') || lower.endsWith('.bash')) return 'shell';
+  if (lower === 'dockerfile' || lower.startsWith('dockerfile.')) return 'dockerfile';
+  if (lower.endsWith('.yaml') || lower.endsWith('.yml')) return 'yaml';
+  if (lower.endsWith('.js') || lower.endsWith('.mjs') || lower.endsWith('.ts')) return 'javascript';
+  return 'cpp';
+}
+
+export function problemTypeForFile(name: string): ProblemType {
+  const lower = (name || '').toLowerCase();
+  if (lower.endsWith('.py')) return 'python';
+  if (lower.endsWith('.sql')) return 'sql';
+  if (lower.endsWith('.sh') || lower.endsWith('.bash')) return 'bash';
+  if (lower === 'dockerfile' || lower.startsWith('dockerfile.')) return 'dockerfile';
+  if (lower.endsWith('.yaml') || lower.endsWith('.yml')) return 'yaml';
+  if (lower.endsWith('.js') || lower.endsWith('.mjs') || lower.endsWith('.ts')) return 'javascript';
+  return 'cpp';
+}
+
+export const PROBLEM_TYPE_LABELS: Record<ProblemType, string> = {
+  cpp: 'C++17',
+  python: 'Python 3',
+  sql: 'SQL',
+  bash: 'Bash',
+  dockerfile: 'Dockerfile',
+  yaml: 'YAML',
+  javascript: 'JavaScript',
 };
 
 export const INITIAL_MAIN = `#include <bits/stdc++.h>

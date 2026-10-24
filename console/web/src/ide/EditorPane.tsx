@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type PointerEvent } from 'react';
 import type { HidPlay } from './hidPayload.ts';
 import { releaseFrame } from './hidKeys.ts';
 import { StreamPane } from './StreamPane.tsx';
-import type { EditorTab } from './types.ts';
+import { languageForFile, problemTypeForFile, type EditorTab } from './types.ts';
 import type { LiveMode } from './useHidLink.ts';
 
 type Props = {
@@ -323,10 +323,18 @@ export function EditorPane({
             New tab
           </button>
           <button type="button" className="btn primary ide-mini" onClick={onRun} disabled={running !== null}>
-            {running === 'program' ? 'Running' : 'Run'}
+            {running === 'program'
+              ? 'Running'
+              : active && problemTypeForFile(active.name) !== 'cpp'
+                ? 'Check'
+                : 'Run'}
           </button>
           <button type="button" className="btn ghost ide-mini" onClick={onTest} disabled={running !== null}>
-            {running === 'tests' ? 'Testing' : 'Test'}
+            {running === 'tests'
+              ? 'Testing'
+              : active && problemTypeForFile(active.name) !== 'cpp'
+                ? 'Verify'
+                : 'Test'}
           </button>
         </div>
       </header>
@@ -350,7 +358,7 @@ export function EditorPane({
           <Editor
             key={active.id}
             height="100%"
-            language="cpp"
+            language={active.language || languageForFile(active.name)}
             theme="vs-dark"
             value={active.value}
             onChange={(next) => onChange(active.id, next ?? '')}
@@ -360,7 +368,7 @@ export function EditorPane({
               fontSize: 13,
               scrollBeyondLastLine: false,
               automaticLayout: true,
-              tabSize: 2,
+              tabSize: languageForFile(active.name) === 'python' ? 4 : 2,
               padding: { top: 8 },
               readOnly: hidPlay !== null,
             }}

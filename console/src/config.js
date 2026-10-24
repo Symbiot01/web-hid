@@ -1,5 +1,6 @@
 'use strict';
 
+const path = require('node:path');
 require('dotenv').config();
 
 /**
@@ -100,6 +101,13 @@ function loadConfig() {
     console.error('[fatal] GEMINI_MODEL is invalid');
     process.exit(1);
   }
+  const historyDbPath = (
+    process.env.HISTORY_DB_PATH || path.join(__dirname, '..', 'data', 'history.db')
+  ).trim();
+  if (!historyDbPath || historyDbPath.length > 512 || /[\u0000-\u001f\u007f]/.test(historyDbPath)) {
+    console.error('[fatal] HISTORY_DB_PATH is invalid');
+    process.exit(1);
+  }
 
   return {
     gatePassword,
@@ -119,6 +127,7 @@ function loadConfig() {
     captureRtspCam,
     geminiApiKey,
     geminiModel,
+    historyDbPath,
   };
 }
 

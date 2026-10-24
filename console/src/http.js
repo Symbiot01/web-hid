@@ -29,6 +29,7 @@ const { createCameraControl } = require('./camera');
 const { createCaptureControl } = require('./capture');
 const { createHidControl, validatePaste } = require('./hid');
 const { createAgentControl } = require('./agent');
+const { createHistoryStore } = require('./history');
 
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX = 50;
@@ -71,11 +72,17 @@ function createApp(opts) {
     streamStatus,
   });
   const capture = createCaptureControl({ token: config.captureToken || '' });
+  const history =
+    opts.history ||
+    createHistoryStore({
+      dbPath: config.historyDbPath || ':memory:',
+    });
   const agent =
     opts.agent ||
     createAgentControl({
       apiKey: config.geminiApiKey || '',
       model: config.geminiModel,
+      onSaveHistory: (record) => history.save(record),
       run: (source, cases) => {
         const body = { source, mode: 'tests', cases };
         const invalid = validateRun(body);
@@ -596,11 +603,77 @@ function createApp(opts) {
   app.post('/api/agent/ask', requireSession(config.sessionSecret), agentLimiter, agentJson, async (req, res) => {
     try {
       const body = req.body && typeof req.body === 'object' ? req.body : {};
-      const view = await agent.ask({ text: body.text, source: body.source });
+      const view = await agent.ask({
+        text: body.text,
+        source: body.source,
+        fileName: body.fileName,
+        problemType: body.problemType,
+      });
       return res.status(200).json(view);
     } catch (error) {
       return agentError(res, error);
     }
+  });
+
+  app.post('/api/agent/check', requireSession(config.sessionSecret), runLimiter, express.json({ limit: '2mb' }), async (req, res) => {
+    try {
+      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      if (typeof agent.checkCode !== 'function') {
+        return res.status(501).json({ error: 'Checker is not available' });
+      }
+      const result = await agent.checkCode({
+        source: body.source,
+        problemType: body.problemType,
+        fileName: body.fileName,
+        mode: body.mode,
+        cases: body.cases,
+      });
+      return res.status(200).json(result);
+    } catch (error) {
+      return agentError(res, error);
+    }
+  });
+
+  const historyLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 60,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many history requests' },
+  });
+
+  app.get('/api/history', requireSession(config.sessionSecret), historyLimiter, (req, res) => {
+    const q = typeof req.query.q === 'string' ? req.query.q : '';
+    const type = typeof req.query.type === 'string' ? req.query.type : '';
+    const limit = req.query.limit;
+    const offset = req.query.offset;
+    return res.status(200).json(history.list({ q, type, limit, offset }));
+  });
+
+  app.get('/api/history/:id', requireSession(config.sessionSecret), historyLimiter, (req, res) => {
+    const item = history.get(req.params.id);
+    if (!item) return res.status(404).json({ error: 'History item not found' });
+    return res.status(200).json(item);
+  });
+
+  app.post('/api/history/:id/open', requireSession(config.sessionSecret), historyLimiter, (req, res) => {
+    const item = history.get(req.params.id);
+    if (!item) return res.status(404).json({ error: 'History item not found' });
+    if (typeof agent.loadHistoryItem !== 'function') {
+      return res.status(501).json({ error: 'Agent history restore is not supported' });
+    }
+    try {
+      const view = agent.loadHistoryItem(item);
+      return res.status(200).json({ ok: true, view });
+    } catch (error) {
+      return agentError(res, error);
+    }
+  });
+
+  app.delete('/api/history/:id', requireSession(config.sessionSecret), historyLimiter, (req, res) => {
+    const removed = history.remove(req.params.id);
+    if (!removed) return res.status(404).json({ error: 'History item not found' });
+    return res.status(200).json({ ok: true });
   });
 
   const publicDir = path.join(__dirname, 'public');
@@ -612,7 +685,7 @@ function createApp(opts) {
       fallthrough: true,
     }),
   );
-  app.get(['/', '/app', '/tutorial'], (_req, res) => {
+  app.get(['/', '/app', '/tutorial', '/history'], (_req, res) => {
     if (!fs.existsSync(indexHtml)) return res.status(404).json({ error: 'Not found' });
     return res.sendFile(indexHtml);
   });
