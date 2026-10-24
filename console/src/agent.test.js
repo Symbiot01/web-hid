@@ -9,6 +9,7 @@ const {
   createGemini,
   entryFunction,
   entrySignature,
+  extractDraftPreview,
   imageOk,
   parseModelJson,
   sanitizeCaseItem,
@@ -615,9 +616,77 @@ test('unconfigured agent refuses and the HTTP status hides the key', async () =>
     assert.equal(JSON.stringify(body).includes(KEY), false);
     const open = await fetch(`http://127.0.0.1:${port}/api/agent`);
     assert.equal(open.status, 401);
+    const eventsOpen = await fetch(`http://127.0.0.1:${port}/api/agent/events`);
+    assert.equal(eventsOpen.status, 401);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test('preserves multi-stage thoughtLog, extracts live draft preview, and supports cancel', async () => {
+  assert.equal(
+    extractDraftPreview('{"source": "#include <bits/stdc++.h>\\nvoid solve() {\\n  long long n;'),
+    '#include <bits/stdc++.h>\nvoid solve() {\n  long long n;',
+  );
+
+  const { agent } = harness(
+    {
+      identify: [
+        {
+          title: 'Add Two',
+          statement: 'Print a + b.',
+          casesFromProblem: true,
+          cases: [{ input: '2 3\n', expected: '5\n' }],
+          plan: 'Add them.',
+        },
+      ],
+      review: [{ ok: true, reason: '' }],
+      solve: [{ source: SOURCE, approach: 'Add the two numbers.' }],
+      retry: [],
+      fix: [],
+      makeCases: [],
+      ask: [],
+    },
+    [passRun()],
+  );
+  const events = [];
+  const unsubscribe = agent.subscribe((snap) => events.push(snap));
+  const view = await agent.begin({ text: 'add two numbers' });
+  unsubscribe();
+  assert.equal(view.phase, 'solved');
+  assert.equal(Array.isArray(view.thoughtLog), true);
+  assert.deepEqual(
+    view.thoughtLog.map((item) => item.task),
+    ['identify', 'review', 'solve'],
+  );
+  assert.equal(view.thoughtLog.every((item) => item.status === 'done'), true);
+  assert.ok(events.length >= 3);
+
+  let abortedSignal = false;
+  const slowAgent = createAgentControl({
+    apiKey: KEY,
+    generate: async (_task, ctx) => {
+      await new Promise((resolve) => {
+        if (ctx && ctx.signal) {
+          ctx.signal.addEventListener('abort', () => {
+            abortedSignal = true;
+            resolve();
+          });
+        }
+      });
+      const err = new Error('Cancelled');
+      err.code = 'ABORTED';
+      throw err;
+    },
+    run: async () => passRun(),
+  });
+  const pending = slowAgent.begin({ text: 'slow problem' });
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  const cancelled = await slowAgent.guide({ action: 'cancel' });
+  assert.equal(abortedSignal, true);
+  assert.equal(cancelled.phase, 'needs_human');
+  assert.equal(cancelled.running, false);
+  await pending;
 });
 
 test('removes hardcoded test-case checks and repairs miscalculated synthetic cases', async () => {

@@ -10,6 +10,8 @@ const IMAGE_MAX = 4 * 1024 * 1024;
 const MAX_IMAGES = 6;
 const OUTPUT_LIMIT = 12_000;
 const THINKING_LIMIT = 6_000;
+const THOUGHT_LOG_LIMIT = 16;
+const DRAFT_PREVIEW_LIMIT = 2_400;
 
 const THINK_LABELS = {
   identify: 'reading the problem',
@@ -21,6 +23,21 @@ const THINK_LABELS = {
   fix: 'repairing the code',
   ask: 'answering',
 };
+
+function extractDraftPreview(rawJson) {
+  if (typeof rawJson !== 'string' || !rawJson) return '';
+  const fieldMatch = /"(?:source|statement|text|reason)"\s*:\s*"((?:\\.|[^"\\])*)/.exec(rawJson);
+  if (!fieldMatch || !fieldMatch[1]) return '';
+  const decoded = fieldMatch[1]
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '')
+    .replace(/\\t/g, '  ')
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, '\\');
+  return decoded.length > DRAFT_PREVIEW_LIMIT
+    ? decoded.slice(decoded.length - DRAFT_PREVIEW_LIMIT)
+    : decoded;
+}
 
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
@@ -691,7 +708,7 @@ function promptFor(task, context) {
   };
 }
 
-function takeModelPayload(payload, bucket, onThought) {
+function takeModelPayload(payload, bucket, onThought, onVisible) {
   const candidate = payload && payload.candidates && payload.candidates[0];
   if (candidate && candidate.finishReason) bucket.finishReason = candidate.finishReason;
   const chunks = candidate && candidate.content ? candidate.content.parts || [] : [];
@@ -702,15 +719,16 @@ function takeModelPayload(payload, bucket, onThought) {
       if (typeof onThought === 'function') onThought(part.text);
     } else {
       bucket.visible += part.text;
+      if (typeof onVisible === 'function') onVisible(part.text, bucket.visible);
     }
   }
 }
 
-async function collectModelParts(response, onThought) {
+async function collectModelParts(response, onThought, onVisible) {
   const bucket = { visible: '', thoughts: '', finishReason: '' };
   const streamable = response.body && typeof response.body.getReader === 'function';
   if (!streamable) {
-    takeModelPayload(await response.json(), bucket, onThought);
+    takeModelPayload(await response.json(), bucket, onThought, onVisible);
     return bucket;
   }
   const reader = response.body.getReader();
@@ -722,7 +740,7 @@ async function collectModelParts(response, onThought) {
     const data = trimmed.slice(5).trim();
     if (!data || data === '[DONE]') return;
     try {
-      takeModelPayload(JSON.parse(data), bucket, onThought);
+      takeModelPayload(JSON.parse(data), bucket, onThought, onVisible);
     } catch {
       // A split frame is completed on a later newline.
     }
@@ -742,7 +760,7 @@ async function collectModelParts(response, onThought) {
   return bucket;
 }
 
-function createGemini({ apiKey, model, fetchImpl, onThought }) {
+function createGemini({ apiKey, model, fetchImpl, onThought, onProgress }) {
   const fetchFn = fetchImpl || fetch;
   const supportsThinkingLevel = /^gemini-[34]/i.test(String(model || MODEL));
   async function generate(task, context) {
@@ -794,6 +812,12 @@ function createGemini({ apiKey, model, fetchImpl, onThought }) {
     let lastError = null;
     let sawRecitation = false;
     for (let tryNum = 0; tryNum < 3; tryNum += 1) {
+      if (context && context.signal && context.signal.aborted) {
+        const abortErr = new Error('Cancelled');
+        abortErr.code = 'ABORTED';
+        abortErr.status = 499;
+        throw abortErr;
+      }
       const config = { ...generationConfig };
       if (config.thinkingConfig) config.thinkingConfig = { thinkingLevel: 'HIGH', includeThoughts: true };
       if (sawRecitation) {
@@ -810,10 +834,19 @@ function createGemini({ apiKey, model, fetchImpl, onThought }) {
       const userParts = antiRecitationSuffix
         ? [{ text: `${built.user}${antiRecitationSuffix}` }, ...parts.slice(1)]
         : parts;
+      const stageLabel = (context && context.stageLabel) || THINK_LABELS[task] || 'working';
       if (typeof onThought === 'function') {
-        onThought('', { reset: true, label: THINK_LABELS[task] || 'working' });
+        onThought('', { reset: true, label: stageLabel, task });
+      }
+      if (typeof onProgress === 'function') {
+        onProgress({ type: 'start', task, label: stageLabel, retry: tryNum });
       }
       let response;
+      const timeoutSignal = AbortSignal.timeout(120_000);
+      const reqSignal =
+        context && context.signal && typeof AbortSignal.any === 'function'
+          ? AbortSignal.any([timeoutSignal, context.signal])
+          : timeoutSignal;
       try {
         response = await fetchFn(
           `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`,
@@ -828,10 +861,16 @@ function createGemini({ apiKey, model, fetchImpl, onThought }) {
               contents: [{ role: 'user', parts: userParts }],
               generationConfig: config,
             }),
-            signal: AbortSignal.timeout(120_000),
+            signal: reqSignal,
           },
         );
       } catch (err) {
+        if (context && context.signal && context.signal.aborted) {
+          const abortErr = new Error('Cancelled');
+          abortErr.code = 'ABORTED';
+          abortErr.status = 499;
+          throw abortErr;
+        }
         lastError = err;
         continue;
       }
@@ -841,19 +880,47 @@ function createGemini({ apiKey, model, fetchImpl, onThought }) {
         throw lastError;
       }
       try {
-        const collected = await collectModelParts(response, (chunk) => {
-          if (typeof onThought === 'function') onThought(redact(chunk, apiKey));
-        });
+        const collected = await collectModelParts(
+          response,
+          (chunk) => {
+            const cleanChunk = redact(chunk, apiKey);
+            if (typeof onThought === 'function') onThought(cleanChunk);
+            if (typeof onProgress === 'function') onProgress({ type: 'thought', task, text: cleanChunk });
+          },
+          (chunk, fullVisible) => {
+            if (typeof onProgress === 'function') {
+              onProgress({
+                type: 'draft',
+                task,
+                delta: redact(chunk, apiKey),
+                visible: redact(fullVisible, apiKey),
+              });
+            }
+          },
+        );
         if (collected.finishReason === 'RECITATION') sawRecitation = true;
         const text = collected.visible.trim() ? collected.visible : collected.thoughts;
         if (!text.trim() || collected.finishReason === 'MAX_TOKENS') {
           lastError = failed('cut');
           continue;
         }
-        return parseModelJson(redact(text, apiKey));
+        const parsed = parseModelJson(redact(text, apiKey));
+        if (typeof onProgress === 'function') {
+          onProgress({ type: 'done', task });
+        }
+        return parsed;
       } catch (err) {
+        if (context && context.signal && context.signal.aborted) {
+          const abortErr = new Error('Cancelled');
+          abortErr.code = 'ABORTED';
+          abortErr.status = 499;
+          throw abortErr;
+        }
         lastError = err && err.status ? err : failed('bad');
       }
+    }
+    if (typeof onProgress === 'function') {
+      onProgress({ type: 'error', task });
     }
     const error = lastError && lastError.status ? lastError : failed('http');
     error.status = 502;
@@ -880,6 +947,92 @@ function formatRun(result) {
 
 function createAgentControl({ apiKey, model, generate, run }) {
   const secret = apiKey || '';
+  const listeners = new Set();
+  let flushTimer = null;
+  let thoughtSeq = 0;
+  let activeAbort = null;
+  let state;
+
+  function notify(immediate = false) {
+    if (listeners.size === 0) return;
+    if (immediate) {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      const snap = snapshot();
+      for (const listener of listeners) {
+        try {
+          listener(snap);
+        } catch {
+          // ignore listener error
+        }
+      }
+      return;
+    }
+    if (flushTimer) return;
+    flushTimer = setTimeout(() => {
+      flushTimer = null;
+      const snap = snapshot();
+      for (const listener of listeners) {
+        try {
+          listener(snap);
+        } catch {
+          // ignore listener error
+        }
+      }
+    }, 60);
+    if (flushTimer && typeof flushTimer.unref === 'function') flushTimer.unref();
+  }
+
+  function currentLogEntry() {
+    if (!state || !Array.isArray(state.thoughtLog) || state.thoughtLog.length === 0) return null;
+    return state.thoughtLog[state.thoughtLog.length - 1];
+  }
+
+  function startLogEntry(task, label) {
+    if (!state) return null;
+    const prev = currentLogEntry();
+    if (prev && (prev.status === 'thinking' || prev.status === 'drafting')) {
+      prev.status = 'done';
+      prev.elapsedMs = Math.max(0, Date.now() - prev.startedAt);
+    }
+    thoughtSeq += 1;
+    const entry = {
+      id: `thought-${thoughtSeq}`,
+      task: clip(task || 'model', 32),
+      label: clip(label || THINK_LABELS[task] || 'working', 80),
+      text: '',
+      draftChars: 0,
+      draftPreview: '',
+      startedAt: Date.now(),
+      elapsedMs: 0,
+      status: 'thinking',
+    };
+    state.thoughtLog.push(entry);
+    if (state.thoughtLog.length > THOUGHT_LOG_LIMIT) {
+      state.thoughtLog.splice(0, state.thoughtLog.length - THOUGHT_LOG_LIMIT);
+    }
+    state.thinking = '';
+    state.thinkingLabel = entry.label;
+    state.drafting = '';
+    state.draftChars = 0;
+    notify(true);
+    return entry;
+  }
+
+  function finishLogEntry(status = 'done') {
+    const entry = currentLogEntry();
+    if (!entry) return;
+    if (entry.status === 'thinking' || entry.status === 'drafting') {
+      entry.status = status;
+      entry.elapsedMs = Math.max(0, Date.now() - entry.startedAt);
+    }
+    state.drafting = '';
+    state.draftChars = 0;
+    notify(true);
+  }
+
   const thoughtSink = {
     fn(text, meta) {
       if (!state) return;
@@ -892,21 +1045,86 @@ function createAgentControl({ apiKey, model, generate, run }) {
       if (!clean) return;
       const next = state.thinking + clean;
       state.thinking = next.length > THINKING_LIMIT ? next.slice(next.length - THINKING_LIMIT) : next;
+      const entry = currentLogEntry();
+      if (entry) {
+        const entryNext = entry.text + clean;
+        entry.text = entryNext.length > THINKING_LIMIT ? entryNext.slice(entryNext.length - THINKING_LIMIT) : entryNext;
+        entry.elapsedMs = Math.max(0, Date.now() - entry.startedAt);
+      }
+      notify(false);
+    },
+    progress(evt) {
+      if (!state || !evt) return;
+      if (evt.type === 'start') {
+        const existing = currentLogEntry();
+        if (!existing || existing.task !== evt.task || (existing.status !== 'thinking' && existing.status !== 'drafting')) {
+          startLogEntry(evt.task, evt.label);
+        } else if (evt.retry > 0) {
+          existing.text = '';
+          existing.draftChars = 0;
+          existing.draftPreview = '';
+          existing.status = 'thinking';
+          notify(true);
+        }
+        return;
+      }
+      if (evt.type === 'draft') {
+        const cleanVisible = redact(String(evt.visible || ''), secret).replace(/\0/g, '');
+        const preview = redact(extractDraftPreview(cleanVisible), secret);
+        state.draftChars = cleanVisible.length;
+        if (preview) state.drafting = preview;
+        const entry = currentLogEntry();
+        if (entry) {
+          entry.status = 'drafting';
+          entry.draftChars = cleanVisible.length;
+          if (preview) entry.draftPreview = preview;
+          entry.elapsedMs = Math.max(0, Date.now() - entry.startedAt);
+        }
+        notify(false);
+        return;
+      }
+      if (evt.type === 'done') {
+        finishLogEntry('done');
+        return;
+      }
+      if (evt.type === 'error') {
+        finishLogEntry('error');
+      }
     },
   };
-  let state;
-  const talk =
+
+  const baseTalk =
     generate ||
     createGemini({
       apiKey: secret,
       model: model || MODEL,
       onThought: (text, meta) => thoughtSink.fn(text, meta),
+      onProgress: (evt) => thoughtSink.progress(evt),
     });
+
+  async function talk(task, context = {}) {
+    const label = context.stageLabel || THINK_LABELS[task] || 'working';
+    startLogEntry(task, label);
+    try {
+      const enriched =
+        activeAbort && !context.signal ? { ...context, signal: activeAbort.signal } : context;
+      const result = await baseTalk(task, enriched);
+      finishLogEntry('done');
+      return result;
+    } catch (err) {
+      finishLogEntry('error');
+      throw err;
+    }
+  }
+  talk.supportsHarness = Boolean(baseTalk && baseTalk.supportsHarness);
+
   state = {
     phase: 'idle',
     step: 'idle',
     attempt: 0,
     running: false,
+    startedAt: null,
+    elapsedMs: 0,
     title: '',
     statement: '',
     entry: 'solve',
@@ -927,6 +1145,9 @@ function createAgentControl({ apiKey, model, generate, run }) {
     activity: '',
     thinking: '',
     thinkingLabel: '',
+    drafting: '',
+    draftChars: 0,
+    thoughtLog: [],
   };
 
   function say(text, kind) {
@@ -936,6 +1157,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
     state.messages.push({ role: 'assistant', text: clean, kind: messageKind });
     if (messageKind === 'step') state.activity = clean;
     if (state.messages.length > 40) state.messages.splice(0, state.messages.length - 40);
+    notify(true);
   }
 
   function busy() {
@@ -947,9 +1169,11 @@ function createAgentControl({ apiKey, model, generate, run }) {
 
   function noteOutput(text) {
     state.output = clip(`${state.output}${text}\n`, OUTPUT_LIMIT);
+    notify(false);
   }
 
   function snapshot() {
+    const now = Date.now();
     return {
       configured: secret.length >= 20,
       phase: state.phase,
@@ -980,7 +1204,45 @@ function createAgentControl({ apiKey, model, generate, run }) {
       activity: state.activity,
       thinking: state.thinking,
       thinkingLabel: state.thinkingLabel,
+      drafting: state.drafting || '',
+      draftChars: state.draftChars || 0,
+      startedAt: state.startedAt || null,
+      elapsedMs:
+        state.running && state.startedAt
+          ? Math.max(0, now - state.startedAt)
+          : state.elapsedMs || 0,
+      thoughtLog: (state.thoughtLog || []).map((item) => ({
+        id: item.id,
+        task: item.task,
+        label: item.label,
+        text: item.text,
+        draftChars: item.draftChars || 0,
+        draftPreview: item.draftPreview || '',
+        startedAt: item.startedAt,
+        elapsedMs:
+          item.status === 'thinking' || item.status === 'drafting'
+            ? Math.max(0, now - item.startedAt)
+            : item.elapsedMs,
+        status: item.status,
+      })),
       running: state.running,
+    };
+  }
+
+  function subscribe(listener) {
+    if (typeof listener !== 'function') return () => {};
+    if (listeners.size >= 16) {
+      const oldest = listeners.values().next().value;
+      if (oldest) listeners.delete(oldest);
+    }
+    listeners.add(listener);
+    try {
+      listener(snapshot());
+    } catch {
+      // ignore
+    }
+    return () => {
+      listeners.delete(listener);
     };
   }
 
@@ -1026,6 +1288,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
       const formatted = cleanSource(wrapped && wrapped.source);
       if (validSource(formatted, secret) && sourceHasEntry(formatted, state.entry)) {
         state.source = formatted;
+        notify(true);
       }
     } catch {
       // If the optional harness pre-step fails, solve will generate both the wrapper and entry function.
@@ -1034,6 +1297,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
 
   async function executeCurrentCases() {
     state.step = 'test';
+    notify(true);
     let result;
     try {
       result = await run(state.source, state.cases);
@@ -1150,6 +1414,10 @@ function createAgentControl({ apiKey, model, generate, run }) {
         entry: state.entry,
         signature: state.signature,
         format: state.format,
+        stageLabel:
+          attempt > 1
+            ? `solving (attempt ${attempt}/${MAX_APPROACHES})`
+            : THINK_LABELS[task] || 'solving',
       });
       task = 'retry';
       const formatted = cleanSource(written && written.source);
@@ -1210,6 +1478,7 @@ function createAgentControl({ apiKey, model, generate, run }) {
             signature: state.signature,
             format: state.format,
             cases: state.cases,
+            stageLabel: `repairing syntax (${fixes}/${MAX_COMPILE_FIXES})`,
           });
           const fixedClean = cleanSource(fixed && fixed.source);
           if (!validSource(fixedClean, secret)) refuse(502, 'The model reply was not usable');
@@ -1280,10 +1549,18 @@ function createAgentControl({ apiKey, model, generate, run }) {
   }
 
   function reset() {
-    if (state.running) busy();
+    if (state.running && activeAbort) {
+      activeAbort.abort();
+      activeAbort = null;
+      state.running = false;
+    } else if (state.running) {
+      busy();
+    }
     state.phase = 'idle';
     state.step = 'idle';
     state.attempt = 0;
+    state.startedAt = null;
+    state.elapsedMs = 0;
     state.title = '';
     state.statement = '';
     state.entry = 'solve';
@@ -1304,6 +1581,10 @@ function createAgentControl({ apiKey, model, generate, run }) {
     state.activity = '';
     state.thinking = '';
     state.thinkingLabel = '';
+    state.drafting = '';
+    state.draftChars = 0;
+    state.thoughtLog = [];
+    notify(true);
     return snapshot();
   }
 
@@ -1315,7 +1596,11 @@ function createAgentControl({ apiKey, model, generate, run }) {
     if (!parsedImages.ok) refuse(400, `Up to ${MAX_IMAGES} JPEG, PNG, or WebP images under 4 MB each`);
     const images = parsedImages.images;
     if (!text && images.length === 0) refuse(400, 'Send a question or an image');
+    const runAbort = new AbortController();
+    activeAbort = runAbort;
     state.running = true;
+    state.startedAt = Date.now();
+    state.elapsedMs = 0;
     state.phase = 'working';
     state.step = 'identify';
     state.attempt = 0;
@@ -1334,6 +1619,9 @@ function createAgentControl({ apiKey, model, generate, run }) {
     state.output = '';
     state.thinking = '';
     state.thinkingLabel = '';
+    state.drafting = '';
+    state.draftChars = 0;
+    state.thoughtLog = [];
     state.hint = clip(input.hint, 4_000);
     state.pendingHint = '';
     state.stopForCases = false;
@@ -1416,12 +1704,18 @@ function createAgentControl({ apiKey, model, generate, run }) {
       await writeAndRun('solve');
       return snapshot();
     } catch (error) {
+      if (runAbort.signal.aborted || (error && error.code === 'ABORTED')) {
+        return snapshot();
+      }
       state.phase = state.phase === 'working' ? 'needs_human' : state.phase;
       say(error.status ? error.message : 'The agent stopped');
       if (error.status && error.status < 500) throw error;
       return snapshot();
     } finally {
+      if (activeAbort === runAbort) activeAbort = null;
+      if (state.startedAt) state.elapsedMs = Math.max(0, Date.now() - state.startedAt);
       state.running = false;
+      notify(true);
     }
   }
 
@@ -1430,6 +1724,21 @@ function createAgentControl({ apiKey, model, generate, run }) {
     const action = input && input.action;
     if (action === 'reset') {
       return reset();
+    }
+    if (action === 'cancel') {
+      if (activeAbort) {
+        activeAbort.abort();
+        activeAbort = null;
+      }
+      finishLogEntry('done');
+      if (state.startedAt) state.elapsedMs = Math.max(0, Date.now() - state.startedAt);
+      state.running = false;
+      if (state.phase === 'working') {
+        state.phase = 'needs_human';
+        say('Stopped the current run. Send guidance or retry when ready.');
+      }
+      notify(true);
+      return snapshot();
     }
     const text = clip(input && input.text, 4_000);
     const parsedImages = normalizeImages(input);
@@ -1488,10 +1797,14 @@ function createAgentControl({ apiKey, model, generate, run }) {
       state.images = [...state.images, ...extraImages].slice(-MAX_IMAGES);
       const attachmentLabel = extraImages.length > 1 ? `${extraImages.length} images attached` : 'Image attached';
       const userMsg = text ? `${text}\n(${attachmentLabel})` : attachmentLabel;
+      const runAbort = new AbortController();
+      activeAbort = runAbort;
       state.running = true;
+      state.startedAt = Date.now();
       state.phase = 'working';
       state.step = 'identify';
       state.messages.push({ role: 'user', text: redact(userMsg, secret), kind: 'user' });
+      notify(true);
       try {
         say(
           `Combining ${extraImages.length} additional screenshot${extraImages.length === 1 ? '' : 's'} with the current problem (${state.images.length} total).`,
@@ -1545,49 +1858,77 @@ function createAgentControl({ apiKey, model, generate, run }) {
         if (state.phase === 'working') state.phase = 'needs_human';
         return snapshot();
       } catch (error) {
+        if (runAbort.signal.aborted || (error && error.code === 'ABORTED')) {
+          return snapshot();
+        }
         state.phase = 'needs_human';
         say(error.status ? error.message : 'The agent stopped');
         if (error.status && error.status < 500) throw error;
         return snapshot();
       } finally {
+        if (activeAbort === runAbort) activeAbort = null;
+        if (state.startedAt) state.elapsedMs = Math.max(0, Date.now() - state.startedAt);
         state.running = false;
+        notify(true);
       }
     }
     if (wantsMoreCases(text, action)) {
       const userMsg = text || 'Add more edge test cases for thorough testing.';
+      const runAbort = new AbortController();
+      activeAbort = runAbort;
       state.running = true;
+      state.startedAt = Date.now();
+      state.elapsedMs = 0;
       state.phase = 'working';
       state.messages.push({ role: 'user', text: redact(userMsg, secret), kind: 'user' });
+      notify(true);
       try {
         await addCasesAndTest(userMsg);
         if (state.phase === 'working') state.phase = 'needs_human';
         return snapshot();
       } catch (error) {
+        if (runAbort.signal.aborted || (error && error.code === 'ABORTED')) {
+          return snapshot();
+        }
         state.phase = 'needs_human';
         say(error.status ? error.message : 'The agent stopped');
         if (error.status && error.status < 500) throw error;
         return snapshot();
       } finally {
+        if (activeAbort === runAbort) activeAbort = null;
+        if (state.startedAt) state.elapsedMs = Math.max(0, Date.now() - state.startedAt);
         state.running = false;
+        notify(true);
       }
     }
     const hint = action === 'retry' ? 'Try a different approach than the one already written.' : text;
     if (!hint) refuse(400, 'Send an approach or some context');
+    const runAbort = new AbortController();
+    activeAbort = runAbort;
     state.running = true;
+    state.startedAt = Date.now();
+    state.elapsedMs = 0;
     state.phase = 'working';
     state.hint = hint;
     state.messages.push({ role: 'user', text: redact(state.hint, secret), kind: 'user' });
+    notify(true);
     try {
       await writeAndRun('retry');
       if (state.phase === 'working') state.phase = 'needs_human';
       return snapshot();
     } catch (error) {
+      if (runAbort.signal.aborted || (error && error.code === 'ABORTED')) {
+        return snapshot();
+      }
       state.phase = 'needs_human';
       say(error.status ? error.message : 'The agent stopped');
       if (error.status && error.status < 500) throw error;
       return snapshot();
     } finally {
+      if (activeAbort === runAbort) activeAbort = null;
+      if (state.startedAt) state.elapsedMs = Math.max(0, Date.now() - state.startedAt);
       state.running = false;
+      notify(true);
     }
   }
 
@@ -1600,13 +1941,14 @@ function createAgentControl({ apiKey, model, generate, run }) {
     return { configured: true, text: reply || 'No answer.' };
   }
 
-  return { begin, guide, ask, reset, snapshot };
+  return { begin, guide, ask, reset, snapshot, subscribe };
 }
 
 module.exports = {
   createAgentControl,
   createGemini,
   parseModelJson,
+  extractDraftPreview,
   imageOk,
   normalizeImages,
   redact,

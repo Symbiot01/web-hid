@@ -5,14 +5,14 @@ import { EditorPane } from './EditorPane.tsx';
 import type { HidPlay } from './hidPayload.ts';
 import './monacoSetup.ts';
 import { SplitPane } from './SplitPane.tsx';
-import { TerminalPane } from './TerminalPane.tsx';
-import { TestsPane } from './TestsPane.tsx';
+import { TerminalPane, type BottomTab } from './TerminalPane.tsx';
 import {
   INITIAL_MAIN,
   type AgentMessage,
   type AgentMode,
   type AgentPhase,
   type AgentStep,
+  type AgentThoughtEntry,
   type AgentView,
   type EditorTab,
   type TestCase,
@@ -89,9 +89,8 @@ type Props = {
 };
 
 export function IdePage({ busy, onLogout }: Props) {
-  const [leftRatio, setLeftRatio] = useState(34);
-  const [sideRatio, setSideRatio] = useState(58);
-  const [editorRatio, setEditorRatio] = useState(68);
+  const [leftRatio, setLeftRatio] = useState(38);
+  const [editorRatio, setEditorRatio] = useState(72);
   const [tabs, setTabs] = useState<EditorTab[]>(STARTER_TABS);
   const [activeTabId, setActiveTabId] = useState(STARTER_TABS[0].id);
   const [cases, setCases] = useState<TestCase[]>(STARTER_CASES);
@@ -106,9 +105,15 @@ export function IdePage({ busy, onLogout }: Props) {
   const [agentTitle, setAgentTitle] = useState('');
   const [agentEntry, setAgentEntry] = useState('solve');
   const [agentSignature, setAgentSignature] = useState('');
+  const [agentFormat, setAgentFormat] = useState('');
   const [agentActivity, setAgentActivity] = useState('');
   const [agentThinking, setAgentThinking] = useState('');
   const [agentThinkingLabel, setAgentThinkingLabel] = useState('');
+  const [agentDrafting, setAgentDrafting] = useState('');
+  const [agentDraftChars, setAgentDraftChars] = useState(0);
+  const [agentStartedAt, setAgentStartedAt] = useState<number | null>(null);
+  const [agentElapsedMs, setAgentElapsedMs] = useState(0);
+  const [agentThoughtLog, setAgentThoughtLog] = useState<AgentThoughtEntry[]>([]);
   const [agentReady, setAgentReady] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmLogout, setConfirmLogout] = useState(false);
@@ -118,7 +123,7 @@ export function IdePage({ busy, onLogout }: Props) {
   const [streamReconnectSeq, setStreamReconnectSeq] = useState(0);
   const [streamStopped, setStreamStopped] = useState(false);
   const [hidContinuous, setHidContinuous] = useState(false);
-  const [bottomTab, setBottomTab] = useState<'terminal' | 'camera' | 'hid'>('terminal');
+  const [bottomTab, setBottomTab] = useState<BottomTab>('cases');
   const [liveMode, setLiveMode] = useState<LiveMode | null>(null);
   const [snapNote, setSnapNote] = useState('');
   const [hidPlay, setHidPlay] = useState<HidPlay | null>(null);
@@ -390,9 +395,22 @@ export function IdePage({ busy, onLogout }: Props) {
   }
 
   const agentOutput = useRef('');
+  const askPending = useRef(false);
 
   function applyAgent(view: AgentView) {
     setAgentReady(view.configured);
+    setAgentThinking(view.thinking ?? '');
+    setAgentThinkingLabel(view.thinkingLabel ?? '');
+    setAgentDrafting(view.drafting ?? '');
+    setAgentDraftChars(view.draftChars ?? 0);
+    setAgentStartedAt(view.startedAt ?? null);
+    setAgentElapsedMs(view.elapsedMs ?? 0);
+    if (Array.isArray(view.thoughtLog)) {
+      setAgentThoughtLog(view.thoughtLog);
+    }
+    if (askPending.current) {
+      return;
+    }
     setAgentPhase(view.phase);
     setAgentStep(view.step ?? 'idle');
     setAgentAttempt(view.attempt ?? 0);
@@ -400,9 +418,8 @@ export function IdePage({ busy, onLogout }: Props) {
     setAgentTitle(view.title ?? '');
     setAgentEntry(view.entry ?? 'solve');
     setAgentSignature(view.signature ?? '');
+    setAgentFormat(view.format ?? '');
     setAgentActivity(view.activity ?? '');
-    setAgentThinking(view.thinking ?? '');
-    setAgentThinkingLabel(view.thinkingLabel ?? '');
     setMessages(
       view.messages.map((item, index) => ({
         id: `agent-msg-${index}`,
@@ -461,10 +478,29 @@ export function IdePage({ busy, onLogout }: Props) {
       }
     }
     void load();
+    let es: EventSource | null = null;
+    if (typeof EventSource !== 'undefined') {
+      try {
+        es = new EventSource('/api/agent/events', { withCredentials: true });
+        es.onmessage = (event) => {
+          if (stop) return;
+          try {
+            const view = JSON.parse(event.data) as AgentView;
+            if (awaitingAgent.current && view.phase !== 'working' && !view.running) return;
+            applyAgent(view);
+          } catch {
+            // ignore malformed frame
+          }
+        };
+      } catch {
+        // Fallback poll handles environments without EventSource.
+      }
+    }
     return () => {
       stop = true;
+      if (es) es.close();
     };
-    // Load the agent once. Later updates come from send and the working poll.
+    // Load the agent once and subscribe to real-time SSE events.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -479,7 +515,7 @@ export function IdePage({ busy, onLogout }: Props) {
           applyAgent(view);
         })
         .catch(() => undefined);
-    }, 400);
+    }, 350);
     return () => window.clearInterval(timer);
   }, [agentPhase]);
 
@@ -489,7 +525,10 @@ export function IdePage({ busy, onLogout }: Props) {
     const userLabel = text && images.length > 0 ? `${text}\n(${attachmentLabel})` : text || attachmentLabel;
     if (mode === 'agent') {
       const starting = agentPhase === 'idle';
-      setAgentPhase('working');
+      if (agentPhase !== 'working') {
+        setAgentPhase('working');
+        setAgentStartedAt(Date.now());
+      }
       if (starting) {
         setAgentStep('identify');
         setAgentAttempt(0);
@@ -499,7 +538,9 @@ export function IdePage({ busy, onLogout }: Props) {
           ? `Reading ${images.length} screenshot${images.length === 1 ? '' : 's'} and extracting the problem…`
           : starting
             ? 'Reading the problem and extracting the statement…'
-            : 'Applying your guidance…';
+            : agentPhase === 'working'
+              ? 'Queuing your guidance for the next attempt…'
+              : 'Applying your guidance…';
       setAgentActivity(live);
       setMessages((prev) => [
         ...(starting ? [] : prev),
@@ -511,18 +552,27 @@ export function IdePage({ busy, onLogout }: Props) {
     }
     try {
       if (mode === 'ask') {
-        const response = await fetch('/api/agent/ask', {
-          method: 'POST',
-          credentials: 'same-origin',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, source: active?.value ?? '' }),
-        });
-        const payload = (await response.json()) as { text?: string; error?: string };
-        setMessages((prev) => [
-          ...prev,
-          { id: nextId('msg'), role: 'assistant', text: payload.text || payload.error || 'No answer.' },
-        ]);
-        setAgentPhase('idle');
+        askPending.current = true;
+        setAgentPhase('working');
+        setAgentStartedAt(Date.now());
+        setAgentActivity('Analyzing the open C++ file and preparing an answer…');
+        try {
+          const response = await fetch('/api/agent/ask', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text, source: active?.value ?? '' }),
+          });
+          const payload = (await response.json()) as { text?: string; error?: string };
+          setMessages((prev) => [
+            ...prev,
+            { id: nextId('msg'), role: 'assistant', text: payload.text || payload.error || 'No answer.' },
+          ]);
+        } finally {
+          askPending.current = false;
+          setAgentPhase('idle');
+          setAgentActivity('');
+        }
         return;
       }
       const starting = agentPhase === 'idle';
@@ -565,7 +615,8 @@ export function IdePage({ busy, onLogout }: Props) {
       }
       applyAgent(payload);
     } catch {
-      setAgentPhase('needs_human');
+      askPending.current = false;
+      setAgentPhase(mode === 'ask' ? 'idle' : 'needs_human');
       setAgentActivity('');
       setMessages((prev) => [...prev, { id: nextId('msg'), role: 'assistant', text: 'The agent is unreachable.', kind: 'step' }]);
     } finally {
@@ -573,14 +624,15 @@ export function IdePage({ busy, onLogout }: Props) {
     }
   }
 
-  function guide(action: 'retry' | 'cases_wrong' | 'more_cases' | 'reset') {
-    if (action === 'reset') {
-      agentOutput.current = '';
+  function guide(action: 'retry' | 'cases_wrong' | 'more_cases' | 'reset' | 'cancel') {
+    if (action === 'reset' || action === 'cancel') {
+      if (action === 'reset') agentOutput.current = '';
+      awaitingAgent.current = false;
       void fetch('/api/agent/guide', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'reset' }),
+        body: JSON.stringify({ action }),
       })
         .then((response) => (response.ok ? response.json() : null))
         .then((payload: AgentView | null) => {
@@ -591,6 +643,7 @@ export function IdePage({ busy, onLogout }: Props) {
     }
     const active = tabs.find((tab) => tab.id === activeTabId);
     setAgentPhase('working');
+    setAgentStartedAt(Date.now());
     setAgentActivity('Applying your guidance…');
     awaitingAgent.current = true;
     void fetch('/api/agent/guide', {
@@ -698,59 +751,35 @@ export function IdePage({ busy, onLogout }: Props) {
         onRatio={setLeftRatio}
         label="Resize side panels and editor"
         first={
-          <SplitPane
-            direction="column"
-            ratio={sideRatio}
-            min={28}
-            max={78}
-            onRatio={setSideRatio}
-            label="Resize agent and test cases"
-            first={
-              <AgentPane
-                mode={mode}
-                phase={agentPhase}
-                step={agentStep}
-                attempt={agentAttempt}
-                maxAttempts={agentMaxAttempts}
-                title={agentTitle}
-                entry={agentEntry}
-                signature={agentSignature}
-                activity={agentActivity}
-                thinking={agentThinking}
-                thinkingLabel={agentThinkingLabel}
-                cases={cases}
-                configured={agentReady}
-                messages={messages}
-                incomingFiles={incomingFiles}
-                onClearIncoming={() => setIncomingFiles([])}
-                onMode={setMode}
-                onSend={(text, image) => {
-                  void send(text, image);
-                }}
-                onAction={guide}
-              />
-            }
-            second={
-              <TestsPane
-                cases={cases}
-                activeId={activeCaseId}
-                onSelect={setActiveCaseId}
-                onAdd={() => {
-                  const id = nextId('case');
-                  setCases((prev) => [...prev, { id, input: '', expected: '', actual: '', status: 'idle' }]);
-                  setActiveCaseId(id);
-                }}
-                onRemove={(id) => {
-                  const remaining = cases.filter((item) => item.id !== id);
-                  if (remaining.length === 0 || remaining.length === cases.length) return;
-                  setCases(remaining);
-                  if (activeCaseId === id) setActiveCaseId(remaining[0].id);
-                }}
-                onChange={(id, patch) => {
-                  setCases((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch, status: 'idle', actual: '' } : item)));
-                }}
-              />
-            }
+          <AgentPane
+            mode={mode}
+            phase={agentPhase}
+            step={agentStep}
+            attempt={agentAttempt}
+            maxAttempts={agentMaxAttempts}
+            title={agentTitle}
+            entry={agentEntry}
+            signature={agentSignature}
+            format={agentFormat}
+            activity={agentActivity}
+            thinking={agentThinking}
+            thinkingLabel={agentThinkingLabel}
+            drafting={agentDrafting}
+            draftChars={agentDraftChars}
+            startedAt={agentStartedAt}
+            elapsedMs={agentElapsedMs}
+            thoughtLog={agentThoughtLog}
+            cases={cases}
+            configured={agentReady}
+            messages={messages}
+            incomingFiles={incomingFiles}
+            onClearIncoming={() => setIncomingFiles([])}
+            onMode={setMode}
+            onSend={(text, image) => {
+              void send(text, image);
+            }}
+            onAction={guide}
+            onOpenCases={() => setBottomTab('cases')}
           />
         }
         second={
@@ -771,9 +800,11 @@ export function IdePage({ busy, onLogout }: Props) {
                 onAdd={addTab}
                 onClose={closeTab}
                 onRun={() => {
+                  setBottomTab('terminal');
                   void run('program');
                 }}
                 onTest={() => {
+                  setBottomTab('cases');
                   void run('tests');
                 }}
                 running={running}
@@ -801,6 +832,25 @@ export function IdePage({ busy, onLogout }: Props) {
                 output={output}
                 tab={bottomTab}
                 onTab={setBottomTab}
+                cases={cases}
+                activeCaseId={activeCaseId}
+                onSelectCase={setActiveCaseId}
+                onAddCase={() => {
+                  const id = nextId('case');
+                  setCases((prev) => [...prev, { id, input: '', expected: '', actual: '', status: 'idle' }]);
+                  setActiveCaseId(id);
+                }}
+                onRemoveCase={(id) => {
+                  const remaining = cases.filter((item) => item.id !== id);
+                  if (remaining.length === 0 || remaining.length === cases.length) return;
+                  setCases(remaining);
+                  if (activeCaseId === id) setActiveCaseId(remaining[0].id);
+                }}
+                onChangeCase={(id, patch) => {
+                  setCases((prev) =>
+                    prev.map((item) => (item.id === id ? { ...item, ...patch, status: 'idle', actual: '' } : item)),
+                  );
+                }}
                 stream={cameraStream}
                 onStream={setCameraStream}
                 onOpenStream={() => {

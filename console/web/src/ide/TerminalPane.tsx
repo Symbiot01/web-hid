@@ -1,9 +1,11 @@
 import { CameraPanel } from './CameraPanel.tsx';
 import { HidPane } from './HidPane.tsx';
+import { TestsPane } from './TestsPane.tsx';
 import type { HidPlay } from './hidPayload.ts';
+import type { TestCase } from './types.ts';
 import type { LiveMode } from './useHidLink.ts';
 
-type Tab = 'terminal' | 'camera' | 'hid';
+export type BottomTab = 'cases' | 'terminal' | 'camera' | 'hid';
 
 type HidStatus = {
   configured?: boolean;
@@ -15,8 +17,14 @@ type LogLine = { id: number; text: string };
 
 type Props = {
   output: string;
-  tab: Tab;
-  onTab: (tab: Tab) => void;
+  tab: BottomTab;
+  onTab: (tab: BottomTab) => void;
+  cases: TestCase[];
+  activeCaseId: string;
+  onSelectCase: (id: string) => void;
+  onAddCase: () => void;
+  onRemoveCase: (id: string) => void;
+  onChangeCase: (id: string, patch: Partial<Pick<TestCase, 'input' | 'expected'>>) => void;
   stream: 2 | 3;
   onStream: (stream: 2 | 3) => void;
   onOpenStream: () => void;
@@ -41,6 +49,12 @@ export function TerminalPane({
   output,
   tab,
   onTab,
+  cases,
+  activeCaseId,
+  onSelectCase,
+  onAddCase,
+  onRemoveCase,
+  onChangeCase,
   stream,
   onStream,
   onOpenStream,
@@ -60,11 +74,28 @@ export function TerminalPane({
   pushLog,
   sendFrame,
 }: Props) {
+  const passCount = cases.filter((item) => item.status === 'pass').length;
+  const hasFail = cases.some((item) => item.status === 'fail');
+  const hasRun = cases.some((item) => item.status !== 'idle');
+  const overallStatus = hasFail ? 'fail' : hasRun && passCount === cases.length ? 'pass' : 'idle';
 
   return (
-    <section className="ide-panel" aria-label="Terminal">
+    <section className="ide-panel" aria-label="Workspace panels">
       <header className="ide-bar">
         <div className="ide-tabs" role="tablist" aria-label="Bottom panels">
+          <button
+            type="button"
+            role="tab"
+            className={`ide-tab${tab === 'cases' ? ' active' : ''}`}
+            aria-selected={tab === 'cases'}
+            onClick={() => onTab('cases')}
+          >
+            Test Cases
+            <span className="ide-tab-count">
+              {hasRun ? `${passCount}/${cases.length}` : cases.length}
+            </span>
+            <span className={`ide-dot ide-dot-${overallStatus}`} aria-hidden="true" />
+          </button>
           <button
             type="button"
             role="tab"
@@ -94,7 +125,20 @@ export function TerminalPane({
           </button>
         </div>
       </header>
-      <pre className={tab === 'terminal' ? 'ide-output' : 'ide-hidden'}>{output || 'Run has not produced output yet.'}</pre>
+      <div className={tab === 'cases' ? 'ide-fill' : 'ide-hidden'}>
+        <TestsPane
+          embedded
+          cases={cases}
+          activeId={activeCaseId}
+          onSelect={onSelectCase}
+          onAdd={onAddCase}
+          onRemove={onRemoveCase}
+          onChange={onChangeCase}
+        />
+      </div>
+      <pre className={tab === 'terminal' ? 'ide-output' : 'ide-hidden'}>
+        {output || 'Run has not produced output yet.'}
+      </pre>
       <div className={tab === 'camera' ? 'ide-fill' : 'ide-hidden'}>
         <CameraPanel
           active={tab === 'camera'}

@@ -525,6 +525,21 @@ function createApp(opts) {
     res.status(200).json(agent.snapshot());
   });
 
+  app.get('/api/agent/events', requireSession(config.sessionSecret), (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+    const unsubscribe =
+      typeof agent.subscribe === 'function'
+        ? agent.subscribe((view) => {
+            if (!res.writableEnded) res.write(`data: ${JSON.stringify(view)}\n\n`);
+          })
+        : () => {};
+    req.on('close', unsubscribe);
+    return undefined;
+  });
+
   app.post('/api/agent', requireSession(config.sessionSecret), agentLimiter, agentJson, async (req, res) => {
     try {
       const body = req.body && typeof req.body === 'object' ? req.body : {};

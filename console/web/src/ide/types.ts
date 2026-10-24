@@ -35,6 +35,18 @@ export type AgentMessage = {
   kind?: AgentKind;
 };
 
+export type AgentThoughtEntry = {
+  id: string;
+  task: string;
+  label: string;
+  text: string;
+  draftChars?: number;
+  draftPreview?: string;
+  startedAt: number;
+  elapsedMs: number;
+  status: 'thinking' | 'drafting' | 'done' | 'error';
+};
+
 export type AgentView = {
   configured: boolean;
   phase: AgentPhase;
@@ -61,6 +73,11 @@ export type AgentView = {
   activity?: string;
   thinking?: string;
   thinkingLabel?: string;
+  drafting?: string;
+  draftChars?: number;
+  startedAt?: number | null;
+  elapsedMs?: number;
+  thoughtLog?: AgentThoughtEntry[];
   running?: boolean;
 };
 

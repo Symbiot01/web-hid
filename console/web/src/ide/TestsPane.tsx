@@ -7,6 +7,7 @@ type Props = {
   onChange: (id: string, patch: Partial<Pick<TestCase, 'input' | 'expected'>>) => void;
   onAdd: () => void;
   onRemove: (id: string) => void;
+  embedded?: boolean;
 };
 
 function statusLabel(item: TestCase): string {
@@ -18,12 +19,20 @@ function statusLabel(item: TestCase): string {
   return 'Idle';
 }
 
-export function TestsPane({ cases, activeId, onSelect, onChange, onAdd, onRemove }: Props) {
+export function TestsPane({
+  cases,
+  activeId,
+  onSelect,
+  onChange,
+  onAdd,
+  onRemove,
+  embedded = false,
+}: Props) {
   const active = cases.find((item) => item.id === activeId) ?? cases[0];
 
-  return (
-    <section className="ide-panel" aria-label="Test cases">
-      <header className="ide-bar">
+  const content = (
+    <>
+      <div className="ide-subbar">
         <div className="ide-tabs" role="tablist" aria-label="Test cases">
           {cases.map((item, index) => (
             <button
@@ -38,45 +47,43 @@ export function TestsPane({ cases, activeId, onSelect, onChange, onAdd, onRemove
               <span className={`ide-dot ide-dot-${item.status}`} aria-hidden="true" />
             </button>
           ))}
-        </div>
-        <div className="ide-bar-actions">
           <button type="button" className="btn ghost ide-mini" onClick={onAdd}>
             + Add
           </button>
         </div>
-      </header>
-      {active ? (
-        <div className="ide-case">
-          <div className="ide-case-head">
-            <div className="ide-case-meta">
-              <span className={`ide-result ide-result-${active.status}`}>{statusLabel(active)}</span>
-              {typeof active.timeMs === 'number' && active.status !== 'idle' ? (
-                <span className="muted ide-case-time">{active.timeMs}ms</span>
-              ) : null}
-            </div>
+        {active ? (
+          <div className="ide-case-meta">
+            <span className={`ide-result ide-result-${active.status}`}>{statusLabel(active)}</span>
+            {typeof active.timeMs === 'number' && active.status !== 'idle' ? (
+              <span className="muted ide-case-time">{active.timeMs}ms</span>
+            ) : null}
             {cases.length > 1 ? (
               <button type="button" className="btn ghost ide-mini" onClick={() => onRemove(active.id)}>
                 Remove
               </button>
             ) : null}
           </div>
-          <label className="ide-field" htmlFor="case-input">
-            <span>Input (stdin)</span>
-            <textarea
-              id="case-input"
-              rows={2}
-              value={active.input}
-              spellCheck={false}
-              placeholder="Sample stdin…"
-              onChange={(event) => onChange(active.id, { input: event.target.value })}
-            />
-          </label>
-          <div className="ide-case-compare">
+        ) : null}
+      </div>
+      {active ? (
+        <div className="ide-case">
+          <div className="ide-case-grid">
+            <label className="ide-field" htmlFor="case-input">
+              <span>Input (stdin)</span>
+              <textarea
+                id="case-input"
+                rows={3}
+                value={active.input}
+                spellCheck={false}
+                placeholder="Sample stdin…"
+                onChange={(event) => onChange(active.id, { input: event.target.value })}
+              />
+            </label>
             <label className="ide-field" htmlFor="case-expected">
-              <span>Expected</span>
+              <span>Expected (stdout)</span>
               <textarea
                 id="case-expected"
-                rows={2}
+                rows={3}
                 value={active.expected}
                 spellCheck={false}
                 placeholder="Expected stdout…"
@@ -84,10 +91,10 @@ export function TestsPane({ cases, activeId, onSelect, onChange, onAdd, onRemove
               />
             </label>
             <label className="ide-field" htmlFor="case-actual">
-              <span>Actual</span>
+              <span>Actual (stdout)</span>
               <textarea
                 id="case-actual"
-                rows={2}
+                rows={3}
                 value={active.actual}
                 readOnly
                 spellCheck={false}
@@ -103,6 +110,20 @@ export function TestsPane({ cases, activeId, onSelect, onChange, onAdd, onRemove
           ) : null}
         </div>
       ) : null}
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div className="ide-fill ide-tests-embedded" aria-label="Test cases">
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <section className="ide-panel" aria-label="Test cases">
+      {content}
     </section>
   );
 }
