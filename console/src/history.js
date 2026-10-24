@@ -1,9 +1,15 @@
 'use strict';
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { DatabaseSync } = require('node:sqlite');
+let DatabaseSync = null;
+try {
+  ({ DatabaseSync } = require('node:sqlite'));
+} catch {
+  DatabaseSync = null;
+}
 const { normalizeProblemType, canonicalFileName } = require('./syntaxCheck');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -109,19 +115,170 @@ function formatDetailRow(row) {
   };
 }
 
+function normalizeRecord(record, existingCreatedAt) {
+  if (!record || typeof record !== 'object') return null;
+  const rawId =
+    typeof record.id === 'string' && UUID_RE.test(record.id.trim())
+      ? record.id.trim().toLowerCase()
+      : crypto.randomUUID();
+  const problemType = normalizeProblemType(record.problemType, record.fileName);
+  const fileName = canonicalFileName(problemType, record.fileName);
+  const title = clip(record.title, MAX_TITLE) || 'Untitled Problem';
+  const entry = clip(record.entry, 64) || 'solve';
+  const signature = clip(record.signature, 200);
+  const format = clip(record.format, 1_000);
+  const validPhases = new Set(['solved', 'needs_human', 'blocked', 'working', 'idle']);
+  const phase = validPhases.has(record.phase) ? record.phase : 'solved';
+  const statement = clip(record.statement, MAX_STATEMENT);
+  const approach = clip(record.approach, MAX_APPROACH);
+  const source =
+    typeof record.source === 'string' ? record.source.replace(/\0/g, '').slice(0, MAX_SOURCE) : '';
+  const messagesJson = JSON.stringify(sanitizeMessages(record.messages));
+  const casesJson = JSON.stringify(sanitizeCases(record.cases));
+  const output = clip(record.output, MAX_OUTPUT);
+  const now = Date.now();
+  return {
+    id: rawId,
+    title,
+    problem_type: problemType,
+    file_name: fileName,
+    entry,
+    signature,
+    format,
+    phase,
+    statement,
+    approach,
+    source,
+    messages_json: messagesJson,
+    cases_json: casesJson,
+    output,
+    created_at: existingCreatedAt || now,
+    updated_at: now,
+  };
+}
+
+function createJsonHistoryStore(filePath) {
+  const rowsById = new Map();
+  const persistPath = filePath && filePath !== ':memory:' ? `${filePath}.json` : null;
+
+  if (persistPath) {
+    try {
+      if (fs.existsSync(persistPath)) {
+        const raw = JSON.parse(fs.readFileSync(persistPath, 'utf8'));
+        if (Array.isArray(raw)) {
+          for (const row of raw) {
+            if (row && typeof row.id === 'string') rowsById.set(row.id, row);
+          }
+        }
+      }
+    } catch {
+      // ignore corrupt or unreadable fallback file
+    }
+  }
+
+  function flush() {
+    if (!persistPath) return;
+    try {
+      fs.mkdirSync(path.dirname(persistPath), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(persistPath, JSON.stringify([...rowsById.values()]), { mode: 0o600 });
+    } catch {
+      // ignore write errors
+    }
+  }
+
+  function get(id) {
+    if (typeof id !== 'string' || !UUID_RE.test(id.trim())) return null;
+    const row = rowsById.get(id.trim().toLowerCase());
+    return formatDetailRow(row);
+  }
+
+  function save(record) {
+    if (!record || typeof record !== 'object') return null;
+    const rawId =
+      typeof record.id === 'string' && UUID_RE.test(record.id.trim())
+        ? record.id.trim().toLowerCase()
+        : undefined;
+    const existing = rawId ? rowsById.get(rawId) : null;
+    const row = normalizeRecord(record, existing?.created_at);
+    if (!row) return null;
+    rowsById.set(row.id, row);
+    flush();
+    return formatDetailRow(row);
+  }
+
+  function list({ q = '', type = '', limit = 50, offset = 0 } = {}) {
+    const cleanQ = clip(q, 120).toLowerCase();
+    const cleanType =
+      typeof type === 'string' && type.trim() && type.trim() !== 'all'
+        ? normalizeProblemType(type.trim())
+        : '';
+    const safeLimit = Number.isFinite(Number(limit))
+      ? Math.min(100, Math.max(1, Math.trunc(Number(limit))))
+      : 50;
+    const safeOffset = Number.isFinite(Number(offset)) ? Math.max(0, Math.trunc(Number(offset))) : 0;
+
+    const all = [...rowsById.values()]
+      .filter((row) => {
+        if (cleanType && row.problem_type !== cleanType) return false;
+        if (cleanQ) {
+          const hay = `${row.title}\n${row.statement}\n${row.approach}\n${row.file_name}`.toLowerCase();
+          if (!hay.includes(cleanQ)) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => b.updated_at - a.updated_at);
+
+    return {
+      total: all.length,
+      items: all.slice(safeOffset, safeOffset + safeLimit).map(formatSummaryRow),
+    };
+  }
+
+  function remove(id) {
+    if (typeof id !== 'string' || !UUID_RE.test(id.trim())) return false;
+    const existed = rowsById.delete(id.trim().toLowerCase());
+    if (existed) flush();
+    return existed;
+  }
+
+  return { save, list, get, remove, close() {} };
+}
+
+function openSqliteDb(requestedPath) {
+  const candidates =
+    requestedPath === ':memory:'
+      ? [':memory:']
+      : [requestedPath, path.join(os.tmpdir(), 'operator-console-data', 'history.db'), ':memory:'];
+
+  for (const candidate of candidates) {
+    try {
+      if (candidate !== ':memory:') {
+        fs.mkdirSync(path.dirname(candidate), { recursive: true, mode: 0o700 });
+      }
+      const db = new DatabaseSync(candidate);
+      if (candidate !== ':memory:') {
+        try {
+          fs.chmodSync(candidate, 0o600);
+        } catch {
+          // ignore chmod errors on special filesystems
+        }
+      }
+      return db;
+    } catch {
+      // try next candidate
+    }
+  }
+  return null;
+}
+
 function createHistoryStore({ dbPath }) {
   const resolvedPath = dbPath || ':memory:';
-  if (resolvedPath !== ':memory:') {
-    const dir = path.dirname(resolvedPath);
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (!DatabaseSync) {
+    return createJsonHistoryStore(resolvedPath);
   }
-  const db = new DatabaseSync(resolvedPath);
-  if (resolvedPath !== ':memory:') {
-    try {
-      fs.chmodSync(resolvedPath, 0o600);
-    } catch {
-      // ignore chmod errors on special filesystems
-    }
+  const db = openSqliteDb(resolvedPath);
+  if (!db) {
+    return createJsonHistoryStore(resolvedPath);
   }
 
   db.exec('PRAGMA busy_timeout = 5000;');
@@ -188,43 +345,28 @@ function createHistoryStore({ dbPath }) {
   `);
 
   function save(record) {
-    if (!record || typeof record !== 'object') return null;
-    const rawId = typeof record.id === 'string' && UUID_RE.test(record.id.trim()) ? record.id.trim().toLowerCase() : crypto.randomUUID();
-    const problemType = normalizeProblemType(record.problemType, record.fileName);
-    const fileName = canonicalFileName(problemType, record.fileName);
-    const title = clip(record.title, MAX_TITLE) || 'Untitled Problem';
-    const entry = clip(record.entry, 64) || 'solve';
-    const signature = clip(record.signature, 200);
-    const format = clip(record.format, 1_000);
-    const validPhases = new Set(['solved', 'needs_human', 'blocked', 'working', 'idle']);
-    const phase = validPhases.has(record.phase) ? record.phase : 'solved';
-    const statement = clip(record.statement, MAX_STATEMENT);
-    const approach = clip(record.approach, MAX_APPROACH);
-    const source = typeof record.source === 'string' ? record.source.replace(/\0/g, '').slice(0, MAX_SOURCE) : '';
-    const messagesJson = JSON.stringify(sanitizeMessages(record.messages));
-    const casesJson = JSON.stringify(sanitizeCases(record.cases));
-    const output = clip(record.output, MAX_OUTPUT);
-    const now = Date.now();
+    const row = normalizeRecord(record);
+    if (!row) return null;
 
     upsertStmt.run(
-      rawId,
-      title,
-      problemType,
-      fileName,
-      entry,
-      signature,
-      format,
-      phase,
-      statement,
-      approach,
-      source,
-      messagesJson,
-      casesJson,
-      output,
-      now,
-      now,
+      row.id,
+      row.title,
+      row.problem_type,
+      row.file_name,
+      row.entry,
+      row.signature,
+      row.format,
+      row.phase,
+      row.statement,
+      row.approach,
+      row.source,
+      row.messages_json,
+      row.cases_json,
+      row.output,
+      row.created_at,
+      row.updated_at,
     );
-    return get(rawId);
+    return get(row.id);
   }
 
   function list({ q = '', type = '', limit = 50, offset = 0 } = {}) {
