@@ -58,7 +58,7 @@ export function HidPane({
   pushLog,
   sendFrame,
 }: Props) {
-  const [wpm, setWpm] = useState(80);
+  const [wpm, setWpm] = useState(240);
   const [jitterPct, setJitterPct] = useState(25);
   const [scope, setScope] = useState<HidScope>('functions');
   const [indent, setIndent] = useState<HidIndent>('strip');

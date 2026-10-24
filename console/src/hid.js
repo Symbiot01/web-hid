@@ -17,8 +17,39 @@ const OP_KEY_DOWN = 1;
 const OP_KEY_UP = 2;
 const OP_RELEASE_ALL = 3;
 const OP_MOUSE = 4;
+const BACKSPACE_USAGE = 0x2a;
 const ESCAPE_USAGE = 0x29;
 const BLOCKED_WITHOUT_ALL = new Set([0xe0, 0xe2, 0xe3, 0xe4, 0xe6, 0xe7, ESCAPE_USAGE]);
+
+/** QWERTY neighbor keys for realistic human typo + backspace corrections. */
+const QWERTY_NEIGHBORS = {
+  a: 'sqz',
+  b: 'vgn',
+  c: 'xdfv',
+  d: 'serfcx',
+  e: 'wsdr',
+  f: 'drtgvc',
+  g: 'ftyhbv',
+  h: 'gyujnb',
+  i: 'ujko',
+  j: 'huikmn',
+  k: 'jiolm',
+  l: 'kop',
+  m: 'njk',
+  n: 'bhjm',
+  o: 'iklp',
+  p: 'ol',
+  q: 'wa',
+  r: 'edft',
+  s: 'awedxz',
+  t: 'rfgy',
+  u: 'yhji',
+  v: 'cfgb',
+  w: 'qase',
+  x: 'zsdc',
+  y: 'tghu',
+  z: 'asx',
+};
 
 /**
  * @param {unknown} value
@@ -113,6 +144,12 @@ function releaseAllFrame() {
   return frame;
 }
 
+function keyTapFrames(usage) {
+  const down = Buffer.from([OP_KEY_DOWN, FLAG_SEQ, 0x00, 0x01, usage & 0xff]);
+  const up = Buffer.from([OP_KEY_UP, FLAG_SEQ, 0x00, 0x01, usage & 0xff]);
+  return [down, up];
+}
+
 /**
  * @param {unknown} body
  * @returns {{ error: string } | { text: string, mode: 'dump' | 'paced', wpm?: number, jitterPct?: number }}
@@ -152,18 +189,189 @@ function tokensMatch(provided, expected) {
 }
 
 /**
+ * Split a string into UTF-16 code point units so surrogate pairs stay together.
+ * @param {string} text
+ * @returns {string[]}
+ */
+function splitCodeUnits(text) {
+  const units = [];
+  for (let i = 0; i < text.length; i += 1) {
+    let unit = text[i];
+    const code = unit.charCodeAt(0);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text[i + 1];
+      if (next && next.charCodeAt(0) >= 0xdc00 && next.charCodeAt(0) <= 0xdfff) {
+        unit += next;
+        i += 1;
+      }
+    }
+    units.push(unit);
+  }
+  return units;
+}
+
+function isWordChar(ch) {
+  return Boolean(ch && /[A-Za-z0-9_]/.test(ch));
+}
+
+/**
+ * Relative cadence weight after typing `units[idx]` before typing `units[idx + 1]`.
+ * Models fast bursts inside identifiers, micro-hesitations at token/operator transitions,
+ * and longer thinking pauses at statement/block boundaries (`;`, `{`, `}`, `\n`),
+ * before normalizing the whole schedule to preserve exact target WPM.
+ * @param {string[]} units
+ * @param {number} idx
+ */
+function boundaryWeight(units, idx) {
+  const ch = units[idx] || '';
+  const prev = idx > 0 ? units[idx - 1] : '';
+  const next = idx + 1 < units.length ? units[idx + 1] : '';
+
+  if (ch === '\n') {
+    if (next === '\n' || prev === '}' || prev === ';') return 3.4;
+    if (prev === '{' || prev === ':') return 2.6;
+    return 2.2;
+  }
+  if (ch === ';' || ch === '{' || ch === '}') {
+    return next === '\n' ? 1.8 : 2.3;
+  }
+  if (ch === '.' || ch === '!' || ch === '?') {
+    return 1.9;
+  }
+  if (ch === ',' || ch === ':' || ch === '(' || ch === ')' || ch === '[' || ch === ']') {
+    return 1.35;
+  }
+  if (ch === ' ' || ch === '\t') {
+    if (prev === ' ' || prev === '\n' || prev === '\t') return 0.45;
+    return 0.82;
+  }
+  if (ch === prev && ch.length === 1) {
+    return 0.42;
+  }
+  if (isWordChar(ch) && isWordChar(next)) {
+    return isWordChar(prev) ? 0.56 : 0.72;
+  }
+  if (isWordChar(ch) && !isWordChar(next)) {
+    return 1.08;
+  }
+  return 1.0;
+}
+
+/**
+ * Builds a server-side human typing schedule with:
+ * 1. Correlated burst-pause rhythm (fast inside words/identifiers, thoughtful pauses at `;`, `{`, `}`, `\n`, `,`, `(`).
+ * 2. Occasional realistic QWERTY neighbor mistypes followed by a realization pause, Backspace keyframe(s), and rewrite.
+ * 3. Exact WPM budget normalization so total duration matches `wpm` despite pauses and backspace rewrites.
+ *
+ * @param {string} text
  * @param {number} wpm
  * @param {number} jitterPct
- * @param {string} ch
+ * @param {() => number} [rng]
  */
-function nextDelayMs(wpm, jitterPct, ch) {
-  const charsPerSec = (wpm * 5) / 60;
-  const baseMs = 1000 / charsPerSec;
-  const scale = 1 + (Math.random() * 2 - 1) * (jitterPct / 100);
-  let ms = baseMs * scale;
-  if (ch === '\n') ms *= 2;
-  else if (ch === '.' || ch === '!' || ch === '?') ms *= 1.5;
-  return Math.max(8, Math.round(ms));
+function buildPacedSchedule(text, wpm, jitterPct, rng = Math.random) {
+  const units = splitCodeUnits(text);
+  const n = units.length;
+  const baseMs = 12000 / Math.max(1, wpm);
+  const targetTotalMs = n > 1 ? Math.round((n - 1) * baseMs) : 0;
+
+  if (n <= 1) {
+    return {
+      totalChars: n,
+      targetTotalMs: 0,
+      steps: units.map((u, idx) => ({ type: 'char', unit: u, progress: idx + 1, delayMs: 0 })),
+    };
+  }
+
+  const jitterFactor = Math.max(0, Math.min(50, jitterPct)) / 25;
+  /** @type {Array<{ type: 'char' | 'backspace', unit: string, progress: number, weight: number }>} */
+  const rawSteps = [];
+
+  // Typo rate scales with jitterPct; disabled when jitterPct === 0 or for tiny snippets.
+  const typoChance = jitterPct > 0 && n >= 16 ? Math.min(0.025, 0.011 * jitterFactor) : 0;
+  let cooldown = 8;
+  let flow = 0;
+
+  for (let i = 0; i < n; i += 1) {
+    const ch = units[i];
+    const next = i + 1 < n ? units[i + 1] : '';
+    const lower = ch.toLowerCase();
+    const neighbors = QWERTY_NEIGHBORS[lower];
+
+    // Consider a human mistype + backspace rewrite inside an identifier word
+    if (
+      typoChance > 0 &&
+      cooldown <= 0 &&
+      i >= 3 &&
+      i < n - 3 &&
+      neighbors &&
+      isWordChar(units[i - 1]) &&
+      isWordChar(next) &&
+      rng() < typoChance
+    ) {
+      const pick = neighbors[Math.floor(rng() * neighbors.length)] || neighbors[0];
+      const wrongChar = ch === ch.toUpperCase() && ch !== lower ? pick.toUpperCase() : pick;
+      const doubleSlip = i + 2 < n && isWordChar(units[i + 1]) && rng() < 0.3;
+
+      if (doubleSlip) {
+        // Type wrong char + next char before noticing, pause, Backspace x2, then retype
+        rawSteps.push({ type: 'char', unit: wrongChar, progress: i, weight: 0.55 });
+        rawSteps.push({ type: 'char', unit: units[i + 1], progress: i, weight: 1.75 });
+        rawSteps.push({ type: 'backspace', unit: '\b', progress: i, weight: 0.48 });
+        rawSteps.push({ type: 'backspace', unit: '\b', progress: i, weight: 0.85 });
+      } else {
+        // Type wrong char, brief realization pause, Backspace, then retype
+        rawSteps.push({ type: 'char', unit: wrongChar, progress: i, weight: 1.65 });
+        rawSteps.push({ type: 'backspace', unit: '\b', progress: i, weight: 0.8 });
+      }
+      cooldown = 22 + Math.floor(rng() * 18);
+    } else {
+      cooldown -= 1;
+    }
+
+    // Smooth correlated wave + local variation so speed drifts naturally across phrases
+    const centeredNoise = rng() + rng() - 1; // triangular distribution in [-1, 1]
+    flow = 0.68 * flow + 0.32 * centeredNoise;
+    const waveMultiplier = Math.max(0.38, 1 + flow * 0.45 * jitterFactor);
+    const weight = i < n - 1 ? boundaryWeight(units, i) * waveMultiplier : 0;
+
+    rawSteps.push({
+      type: 'char',
+      unit: ch,
+      progress: i + 1,
+      weight,
+    });
+  }
+
+  // Normalize all weights so the sum of delays equals targetTotalMs (keeping exact WPM).
+  let totalWeight = 0;
+  for (let i = 0; i < rawSteps.length - 1; i += 1) {
+    totalWeight += rawSteps[i].weight;
+  }
+
+  const minStepMs = wpm >= 180 ? 4 : 6;
+  const scale = totalWeight > 0 ? targetTotalMs / totalWeight : 0;
+  let accumulatedMs = 0;
+
+  const steps = rawSteps.map((step, idx) => {
+    if (idx === rawSteps.length - 1) {
+      return { type: step.type, unit: step.unit, progress: step.progress, delayMs: 0 };
+    }
+    const idealCum = accumulatedMs + step.weight * scale;
+    const delayMs = Math.max(minStepMs, Math.round(step.weight * scale));
+    accumulatedMs = idealCum;
+    return {
+      type: step.type,
+      unit: step.unit,
+      progress: step.progress,
+      delayMs,
+    };
+  });
+
+  return {
+    totalChars: n,
+    targetTotalMs,
+    steps,
+  };
 }
 
 /**
@@ -451,44 +659,52 @@ function createHidControl(options = {}) {
     const { text, wpm, jitterPct } = opts;
     if (running) return { ok: false, message: 'Paste already running' };
     if (!deviceOpen()) return { ok: false, message: 'Device not connected' };
+    const schedule = buildPacedSchedule(text, wpm, jitterPct);
+    const total = schedule.totalChars;
     running = true;
     abort = new AbortController();
     const { signal } = abort;
     let sent = 0;
-    publish({ state: 'running', sent: 0, total: text.length, mode: 'paced' });
+    publish({ state: 'running', sent: 0, total, mode: 'paced' });
     try {
-      for (let i = 0; i < text.length; i += 1) {
+      for (let i = 0; i < schedule.steps.length; i += 1) {
+        const step = schedule.steps[i];
         if (signal.aborted) {
           publish({ state: 'cancelled', sent });
-          return { ok: false, message: 'Cancelled', sent, total: text.length };
+          return { ok: false, message: 'Cancelled', sent, total };
         }
         await waitWhilePaused(signal);
         if (paused) await waitWhilePaused(signal);
         if (signal.aborted) {
           publish({ state: 'cancelled', sent });
-          return { ok: false, message: 'Cancelled', sent, total: text.length };
+          return { ok: false, message: 'Cancelled', sent, total };
         }
         if (!deviceOpen()) {
           publish({ state: 'error', sent });
-          return { ok: false, message: 'Device not connected', sent, total: text.length };
+          return { ok: false, message: 'Device not connected', sent, total };
         }
-        let unit = text[i];
-        const code = unit.charCodeAt(0);
-        if (code >= 0xd800 && code <= 0xdbff) {
-          const next = text[i + 1];
-          if (next && next.charCodeAt(0) >= 0xdc00 && next.charCodeAt(0) <= 0xdfff) {
-            unit += next;
-            i += 1;
+        if (step.type === 'backspace') {
+          const [down, up] = keyTapFrames(BACKSPACE_USAGE);
+          const downResult = forwardLiveFrame(down, 'typing');
+          if (!downResult.ok) {
+            publish({ state: 'error', sent });
+            return { ...downResult, sent, total };
+          }
+          const upResult = forwardLiveFrame(up, 'typing');
+          if (!upResult.ok) {
+            publish({ state: 'error', sent });
+            return { ...upResult, sent, total };
+          }
+        } else {
+          const result = sendPasteText(step.unit);
+          if (!result.ok) {
+            publish({ state: 'error', sent });
+            return { ...result, sent, total };
           }
         }
-        const result = sendPasteText(unit);
-        if (!result.ok) {
-          publish({ state: 'error', sent });
-          return { ...result, sent, total: text.length };
-        }
-        sent += 1;
+        sent = step.progress;
         publish({ sent });
-        if (i < text.length - 1) await sleep(nextDelayMs(wpm, jitterPct, unit[0]), signal, delayGate);
+        if (step.delayMs > 0) await sleep(step.delayMs, signal, delayGate);
       }
       publish({ state: 'complete', sent });
       return { ok: true, chars: sent, mode: 'paced', wpm, jitterPct };
