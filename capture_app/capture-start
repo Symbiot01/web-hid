@@ -93,7 +93,10 @@ fi
 # Load default console/capture token from console/.env if not set in environment
 CONSOLE_ENV_FILE="${HOME}/Projects/remote_operator_console/console/.env"
 if [ -z "${CAPTURE_TOKEN:-}" ] && [ -f "${CONSOLE_ENV_FILE}" ]; then
-    CAPTURE_TOKEN="$(grep -E '^(CAPTURE_TOKEN|BRIDGE_TOKEN)=' "${CONSOLE_ENV_FILE}" | head -n1 | cut -d= -f2- | tr -d '[:space:]' || true)"
+    CAPTURE_TOKEN="$(grep -E '^CAPTURE_TOKEN=' "${CONSOLE_ENV_FILE}" | head -n1 | cut -d= -f2- | tr -d '[:space:]' || true)"
+    if [ -z "${CAPTURE_TOKEN}" ]; then
+        CAPTURE_TOKEN="$(grep -E '^BRIDGE_TOKEN=' "${CONSOLE_ENV_FILE}" | head -n1 | cut -d= -f2- | tr -d '[:space:]' || true)"
+    fi
 fi
 CAPTURE_WHIP_URL="${CAPTURE_WHIP_URL:-https://mediarelay.sahilpatel.online/desk/whip}"
 CAPTURE_CONSOLE_URL="${CAPTURE_CONSOLE_URL:-https://webrelay.sahilpatel.online}"

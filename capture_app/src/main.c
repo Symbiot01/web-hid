@@ -629,16 +629,9 @@ int main(int argc, char **argv)
     bool on_demand_mode = (cfg.console_url[0] != '\0' && cfg.capture_token[0] != '\0');
     if (on_demand_mode) {
         if (http_console_post_status(&cfg, false, cfg.fps, cfg.bitrate_kbps) != 0) {
-            LOG_WARN("main", "console %s rejected status check (deployment pending or token mismatch); falling back to direct streaming",
-                     cfg.console_url);
+            LOG_WARN("main", "console %s rejected status check (deployment pending or token mismatch); falling back to direct streaming on %s",
+                     cfg.console_url, cfg.whip_url);
             on_demand_mode = false;
-            size_t ulen = strlen(cfg.whip_url);
-            const char *desk_suffix = "/desk/whip";
-            size_t slen = strlen(desk_suffix);
-            if (ulen >= slen && strcmp(cfg.whip_url + ulen - slen, desk_suffix) == 0) {
-                memcpy(cfg.whip_url + ulen - slen, "/cam/whip", strlen("/cam/whip") + 1);
-                LOG_INFO("main", "fallback WHIP endpoint -> %s", cfg.whip_url);
-            }
         }
     }
     atomic_bool video_wanted;
