@@ -66,10 +66,13 @@ export function StreamPane({
   const stageRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef(stream);
   const sourceRef = useRef(source);
+  const onSourceRef = useRef(onSource);
+  const userSelectedSourceRef = useRef(false);
   const liveRef = useRef(liveMode);
   const sendRef = useRef(sendFrame);
   streamRef.current = stream;
   sourceRef.current = source;
+  onSourceRef.current = onSource;
   liveRef.current = liveMode;
   sendRef.current = sendFrame;
 
@@ -116,10 +119,16 @@ export function StreamPane({
           capture?: { agent?: string; desk?: boolean };
         };
         if (stop) return;
-        setAvailability({
-          camOnline: body.bridge === 'online' || Boolean(body.ingest),
-          deskOnline: body.capture?.agent === 'online' || Boolean(body.capture?.desk),
-        });
+        const camOnline = body.bridge === 'online' || Boolean(body.ingest);
+        const deskOnline = body.capture?.agent === 'online' || Boolean(body.capture?.desk);
+        setAvailability({ camOnline, deskOnline });
+        if (!userSelectedSourceRef.current) {
+          if (deskOnline && !camOnline && sourceRef.current !== 'desk') {
+            onSourceRef.current('desk');
+          } else if (camOnline && !deskOnline && sourceRef.current !== 'cam') {
+            onSourceRef.current('cam');
+          }
+        }
       } catch {
         // ignore transient poll error
       }
@@ -345,7 +354,10 @@ export function StreamPane({
           <button
             type="button"
             className={`btn ${source === 'cam' ? 'primary' : 'ghost'} ide-mini`}
-            onClick={() => onSource('cam')}
+            onClick={() => {
+              userSelectedSourceRef.current = true;
+              onSource('cam');
+            }}
             title="Switch to LookCam Camera (pauses Capture App stream to save Wi-Fi bandwidth)"
           >
             Camera ({availability.camOnline ? 'Available' : 'Offline'})
@@ -353,7 +365,10 @@ export function StreamPane({
           <button
             type="button"
             className={`btn ${source === 'desk' ? 'primary' : 'ghost'} ide-mini`}
-            onClick={() => onSource('desk')}
+            onClick={() => {
+              userSelectedSourceRef.current = true;
+              onSource('desk');
+            }}
             title="Switch to Capture App Screen Stream (pauses Camera stream to save Wi-Fi bandwidth)"
           >
             Capture App ({availability.deskOnline ? 'Available' : 'Offline'})

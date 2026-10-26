@@ -79,14 +79,19 @@ function loadConfig() {
     console.error('[fatal] CAPTURE_TOKEN must be at least 16 characters when set');
     process.exit(1);
   }
+  const defaultDeskSrtUrl = process.env.STREAM_SRT_URL
+    ? streamSrtUrl.replace(/publish:cam\b/, 'publish:desk')
+    : 'srt://127.0.0.1:8890?streamid=publish:desk&pkt_size=1316';
   const streamDeskSrtUrl = srtUrl(
-    process.env.STREAM_DESK_SRT_URL ||
-      'srt://127.0.0.1:8890?streamid=publish:desk&pkt_size=1316',
+    process.env.STREAM_DESK_SRT_URL || defaultDeskSrtUrl,
     'STREAM_DESK_SRT_URL',
   );
+  const defaultDeskWhepUrl = process.env.STREAM_WHEP_URL
+    ? streamWhepUrl.replace(/\/cam\/whep(\/?)$/, '/desk/whep$1')
+    : 'http://127.0.0.1:8889/desk/whep';
   const streamDeskWhepUrl = httpUrl(
     'STREAM_DESK_WHEP_URL',
-    process.env.STREAM_DESK_WHEP_URL || 'http://127.0.0.1:8889/desk/whep',
+    process.env.STREAM_DESK_WHEP_URL || defaultDeskWhepUrl,
   );
   const captureRtspCam = rtspUrl(
     process.env.CAPTURE_RTSP_CAM || 'rtsp://127.0.0.1:8554/cam',

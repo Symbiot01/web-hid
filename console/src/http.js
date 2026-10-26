@@ -71,7 +71,10 @@ function createApp(opts) {
     password: config.lookcamPassword,
     streamStatus,
   });
-  const capture = createCaptureControl({ token: config.captureToken || '' });
+  const capture = createCaptureControl({
+    token: config.captureToken || '',
+    bridgeToken: config.bridgeToken || '',
+  });
   const history =
     opts.history ||
     createHistoryStore({

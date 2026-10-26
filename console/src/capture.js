@@ -13,6 +13,7 @@ const MAX_WATCHERS = 20;
  * Outbound capture agent. The browser never receives the bearer token.
  * @param {{
  *   token?: string,
+ *   bridgeToken?: string,
  *   now?: () => number,
  *   schedule?: typeof setTimeout,
  *   cancel?: typeof clearTimeout,
@@ -20,7 +21,9 @@ const MAX_WATCHERS = 20;
  * }} [options]
  */
 function createCaptureControl(options = {}) {
-  const token = typeof options.token === 'string' ? options.token : '';
+  const token = typeof options.token === 'string' ? options.token.trim() : '';
+  const bridgeToken = typeof options.bridgeToken === 'string' ? options.bridgeToken.trim() : '';
+  const validTokens = [token, bridgeToken].filter((t) => t.length >= 16);
   const now = options.now || Date.now;
   const schedule = options.schedule || setTimeout;
   const cancel = options.cancel || clearTimeout;
@@ -47,7 +50,7 @@ function createCaptureControl(options = {}) {
   let snap = null;
 
   function configured() {
-    return token.length >= 16;
+    return validTokens.length > 0;
   }
 
   function online() {
@@ -59,7 +62,8 @@ function createCaptureControl(options = {}) {
   }
 
   function authorize(req) {
-    return configured() && tokensMatch(bearer(req), token);
+    const candidate = bearer(req);
+    return configured() && validTokens.some((t) => tokensMatch(candidate, t));
   }
 
   /**
