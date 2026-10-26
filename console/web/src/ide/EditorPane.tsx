@@ -22,6 +22,8 @@ type Props = {
   keepStreamWarm: boolean;
   streamSuspended: boolean;
   onView: (view: 'editor' | 'stream') => void;
+  streamSource: 'cam' | 'desk';
+  onStreamSource: (source: 'cam' | 'desk') => void;
   stream: 2 | 3;
   reconnectSeq: number;
   continuous: boolean;
@@ -52,6 +54,8 @@ export function EditorPane({
   keepStreamWarm,
   streamSuspended,
   onView,
+  streamSource,
+  onStreamSource,
   stream,
   reconnectSeq,
   continuous,
@@ -242,6 +246,30 @@ export function EditorPane({
               className="ide-menu-item"
               onClick={() => {
                 closeMenu();
+                onStreamSource('cam');
+                onView('stream');
+              }}
+            >
+              {streamSource === 'cam' ? '● ' : ''}Source: Camera (LookCam)
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="ide-menu-item"
+              onClick={() => {
+                closeMenu();
+                onStreamSource('desk');
+                onView('stream');
+              }}
+            >
+              {streamSource === 'desk' ? '● ' : ''}Source: Capture App (Screen)
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="ide-menu-item"
+              onClick={() => {
+                closeMenu();
                 onLive('typing');
               }}
             >
@@ -343,6 +371,8 @@ export function EditorPane({
           <StreamPane
             active={view === 'stream' && !streamSuspended}
             keepWarm={keepStreamWarm && !streamSuspended}
+            source={streamSource}
+            onSource={onStreamSource}
             stream={stream}
             reconnectSeq={reconnectSeq}
             liveMode={liveMode}

@@ -32,7 +32,10 @@ function waitIceComplete(pc: RTCPeerConnection, timeoutMs = 800): Promise<void> 
   });
 }
 
-export async function startWhep(onTrack: (event: RTCTrackEvent) => void): Promise<WhepSession> {
+export async function startWhep(
+  onTrack: (event: RTCTrackEvent) => void,
+  source: 'cam' | 'desk' = 'cam',
+): Promise<WhepSession> {
   const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
   pc.addTransceiver('video', { direction: 'recvonly' });
   pc.addEventListener('track', onTrack);
@@ -46,7 +49,7 @@ export async function startWhep(onTrack: (event: RTCTrackEvent) => void): Promis
     throw new Error('Could not build the stream offer');
   }
 
-  const response = await fetch('/api/stream/whep', {
+  const response = await fetch(`/api/stream/whep?source=${encodeURIComponent(source)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/sdp', Accept: 'application/sdp' },
     body: localSdp,

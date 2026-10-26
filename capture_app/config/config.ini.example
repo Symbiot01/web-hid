@@ -1,0 +1,75 @@
+# /etc/capture-app/config.ini - Production configuration for capture-app
+#
+# All settings below can also be overridden via CLI flags (run `capture-app --help`).
+
+[capture]
+# Target output frame rate (compositor 60Hz frames are down-paced by wall-clock filtering)
+fps = 10
+
+# Target monitor identifier (default: primary; portal dialog lets user choose monitor)
+monitor = primary
+
+# Optional file path to persist XDG Desktop Portal restore_token across restarts
+# restore_token_file = /var/tmp/capture-app-restore.token
+
+[encode]
+# Hardware VA-API H.264 target bitrate in kbps
+bitrate_kbps = 3000
+
+# Keyframe (IDR + SPS/PPS) interval in seconds (GOP = keyframe_interval * fps)
+keyframe_interval = 2
+
+# DRM render node path (no root or DRM_MASTER privilege required; falls back to
+# scanning /dev/dri/renderD128..renderD135 on hybrid iGPU+dGPU machines)
+render_node = /dev/dri/renderD128
+
+[whip]
+# WHIP ingest endpoint on MediaMTX behind Traefik (TCP 443)
+# Uses /desk/whip so it has its own MediaMTX path separate from /cam/whip
+whip_url = https://mediarelay.sahilpatel.online/desk/whip
+
+# Operator Console control-plane URL and token for on-demand standby mode:
+# When set, capture-app stays in 0-kbps standby (polling /api/capture/poll)
+# and only streams WHIP video when selected in the Operator Console UI.
+# console_url = https://webrelay.sahilpatel.online
+# capture_token = YOUR_CAPTURE_OR_BRIDGE_TOKEN
+
+# Optional Bearer token if configured on MediaMTX / Traefik
+# whip_bearer_token =
+
+# Optional comma-separated STUN/TURN servers (default: disabled for direct WHIP ingest)
+# whip_ice_servers = stun:stun.l.google.com:19302
+
+# Optional mTLS client certificate, private key, and CA bundle (PEM)
+# Both cert and key must be provided together when enabling mTLS.
+# cert = /etc/capture-app/certs/client.crt
+# key  = /etc/capture-app/certs/client.key
+# ca   = /etc/capture-app/certs/ca.crt
+
+# Optional OpenSSL/libcurl SHA-256 public key pin (e.g. sha256//base64==)
+# spki_pin_sha256 =
+
+# Exponential backoff reconnection settings
+reconnect_initial_delay_ms = 500
+reconnect_max_delay_ms     = 30000
+reconnect_max_attempts     = 0     # 0 = retry forever
+
+[pipeline]
+# Bounded SPSC queue depth between PipeWire capture callback and VA-API encoder
+pipeline_depth = 4
+
+# Queue overflow drop policy: oldest | newest | block
+drop_policy = oldest
+
+[logging]
+# Log verbosity: DEBUG | INFO | WARN | ERROR
+log_level = INFO
+
+# Log destination: "stderr" or absolute file path (rotates at 10 MB, keeps .1, .2, .3)
+log_file = stderr
+
+# Optional run duration in seconds (0 = run until SIGINT/SIGTERM)
+duration = 0
+
+# Optional PID file path
+# pid_file = /run/user/1000/capture-app.pid

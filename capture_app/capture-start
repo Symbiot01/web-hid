@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# capture-start - Idempotent desktop launcher to start capture-app in background.
+#
+# Requirements satisfied:
+#   - Uses flock to serialize concurrent invocations
+#   - Logs to ~/.local/state/capture-app/start.log
+#   - Cleans up stale PID files if pgrep -x capture-app returns nothing
+#   - Idempotent: if already running, logs & notifies and exits 0
+#   - Inherits and exports XDG_RUNTIME_DIR and PIPEWIRE_REMOTE
+#   - Emits desktop notification via notify-send (no-op fallback if absent)
+#   - Exits 0 on success, 1 on failure with a clear message
+
+set -uo pipefail
+
+STATE_DIR="${HOME}/.local/state/capture-app"
+PID_FILE="${STATE_DIR}/capture-app.pid"
+LOG_FILE="${STATE_DIR}/start.log"
+LOCK_FILE="${STATE_DIR}/shortcut.lock"
+
+mkdir -p "${STATE_DIR}"
+chmod 0700 "${STATE_DIR}" 2>/dev/null || true
+
+ts() {
+    date '+%Y-%m-%d %H:%M:%S.%3N'
+}
+
+log_msg() {
+    local msg="$1"
+    printf '[%s] [capture-start] %s\n' "$(ts)" "${msg}" >> "${LOG_FILE}"
+}
+
+notify_user() {
+    local urgency="$1"
+    local summary="$2"
+    local body="$3"
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send -u "${urgency}" -a "capture-app" "${summary}" "${body}" >/dev/null 2>&1 || true
+    fi
+}
+
+# Inherit and export XDG_RUNTIME_DIR and PIPEWIRE_REMOTE for desktop portal / PipeWire access
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export PIPEWIRE_REMOTE="${PIPEWIRE_REMOTE:-pipewire-0}"
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -S "${XDG_RUNTIME_DIR}/bus" ]; then
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+fi
+
+# Resolve capture-app binary (prefer latest project build or ~/.local/bin before /usr/local/bin)
+CAPTURE_BIN=""
+if [ -x "${HOME}/Projects/remote_operator_console/capture_app/capture-app" ]; then
+    CAPTURE_BIN="${HOME}/Projects/remote_operator_console/capture_app/capture-app"
+elif [ -x "${HOME}/.local/bin/capture-app" ]; then
+    CAPTURE_BIN="${HOME}/.local/bin/capture-app"
+elif command -v capture-app >/dev/null 2>&1; then
+    CAPTURE_BIN="$(command -v capture-app)"
+elif [ -x "/usr/local/bin/capture-app" ]; then
+    CAPTURE_BIN="/usr/local/bin/capture-app"
+else
+    msg="ERROR: capture-app binary not found in PATH or /usr/local/bin/capture-app"
+    log_msg "${msg}"
+    notify_user critical "Capture Start Failed" "${msg}"
+    echo "${msg}" >&2
+    exit 1
+fi
+
+# Serialize concurrent start/stop invocations with flock
+exec 9>"${LOCK_FILE}"
+if ! flock -w 15 9; then
+    msg="ERROR: Another capture-start/stop operation is currently in progress (lock timeout)"
+    log_msg "${msg}"
+    notify_user critical "Capture Start Failed" "${msg}"
+    echo "${msg}" >&2
+    exit 1
+fi
+
+# Stale PID check & live process detection via pgrep -x capture-app
+LIVE_PIDS="$(pgrep -x -u "$(id -u)" capture-app 2>/dev/null || true)"
+if [ -z "${LIVE_PIDS}" ]; then
+    if [ -f "${PID_FILE}" ]; then
+        stale_val="$(cat "${PID_FILE}" 2>/dev/null || echo "unknown")"
+        log_msg "Removing stale PID file ${PID_FILE} (stale PID=${stale_val}, no live capture-app process)"
+        rm -f "${PID_FILE}"
+    fi
+else
+    first_pid="$(printf '%s\n' "${LIVE_PIDS}" | head -n1)"
+    msg="already running (PID ${first_pid})"
+    log_msg "No-op: capture-app is ${msg}"
+    notify_user low "Screen Capture Already Running" "capture-app is ${msg}."
+    echo "${msg}"
+    exit 0
+fi
+
+# Load default console/capture token from console/.env if not set in environment
+CONSOLE_ENV_FILE="${HOME}/Projects/remote_operator_console/console/.env"
+if [ -z "${CAPTURE_TOKEN:-}" ] && [ -f "${CONSOLE_ENV_FILE}" ]; then
+    CAPTURE_TOKEN="$(grep -E '^(CAPTURE_TOKEN|BRIDGE_TOKEN)=' "${CONSOLE_ENV_FILE}" | head -n1 | cut -d= -f2- | tr -d '[:space:]' || true)"
+fi
+CAPTURE_WHIP_URL="${CAPTURE_WHIP_URL:-https://mediarelay.sahilpatel.online/desk/whip}"
+CAPTURE_CONSOLE_URL="${CAPTURE_CONSOLE_URL:-https://webrelay.sahilpatel.online}"
+
+EXTRA_ARGS=(--whip-url "${CAPTURE_WHIP_URL}")
+if [ -n "${CAPTURE_TOKEN:-}" ] && [ -n "${CAPTURE_CONSOLE_URL:-}" ]; then
+    EXTRA_ARGS+=(--console-url "${CAPTURE_CONSOLE_URL}" --capture-token "${CAPTURE_TOKEN}")
+fi
+
+log_msg "Invoking: ${CAPTURE_BIN} start --whip-url ${CAPTURE_WHIP_URL} --console-url ${CAPTURE_CONSOLE_URL} (XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}, PIPEWIRE_REMOTE=${PIPEWIRE_REMOTE})"
+
+START_OUT="$("${CAPTURE_BIN}" start "${EXTRA_ARGS[@]}" "$@" 9>&- 2>&1)"
+START_RC=$?
+
+while IFS= read -r line; do
+    [ -n "${line}" ] && log_msg "output: ${line}"
+done <<< "${START_OUT}"
+
+if [ "${START_RC}" -ne 0 ]; then
+    msg="Failed to start capture-app (exit code ${START_RC}): ${START_OUT}"
+    log_msg "ERROR: ${msg}"
+    notify_user critical "Screen Capture Failed to Start" "Exit code ${START_RC}. Check ${LOG_FILE}"
+    echo "${msg}" >&2
+    exit 1
+fi
+
+NEW_PID="$(pgrep -x -u "$(id -u)" capture-app 2>/dev/null | head -n1 || true)"
+if [ -z "${NEW_PID}" ]; then
+    msg="ERROR: capture-app start returned 0 but no live capture-app process was found"
+    log_msg "${msg}"
+    notify_user critical "Screen Capture Failed to Start" "${msg}"
+    echo "${msg}" >&2
+    exit 1
+fi
+
+msg="capture-app started (PID ${NEW_PID})"
+log_msg "SUCCESS: ${msg}"
+notify_user normal "Screen Capture Started" "${msg}"
+echo "${msg}"
+exit 0

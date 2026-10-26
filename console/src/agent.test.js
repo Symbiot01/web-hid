@@ -12,6 +12,7 @@ const {
   entrySignature,
   extractDraftPreview,
   imageOk,
+  normalizeImages,
   normalizeProblemType,
   parseModelJson,
   sanitizeCaseItem,
@@ -534,6 +535,14 @@ test('combines multiple images at start and when follow-up screenshots are added
   assert.equal(second.phase, 'solved');
   assert.equal(second.cases.length, 2);
   assert.deepEqual(seenImages, [2, 3]);
+
+  const fifteenJpegs = Array.from({ length: 15 }, (_, i) => ({
+    mime: 'image/jpeg',
+    data: Buffer.from([0xff, 0xd8, 0xff, i + 1]).toString('base64'),
+  }));
+  assert.equal(normalizeImages({ images: fifteenJpegs }).ok, true);
+  assert.equal(normalizeImages({ images: fifteenJpegs }).images.length, 15);
+  assert.equal(normalizeImages({ images: [...fifteenJpegs, jpeg1] }).ok, false);
 });
 
 test('a second start stays on the run already in progress', async () => {
@@ -920,9 +929,15 @@ test('/api/history and /api/agent/check endpoints enforce auth, support search, 
       { role: 'assistant', text: 'Solved in Dockerfile.', kind: 'step' },
     ],
     cases: [{ input: 'Non-root user check', expected: 'USER node', actual: 'USER node', status: 'pass', timeMs: 2 }],
+    images: [
+      { mime: 'image/jpeg', data: Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x01]).toString('base64') },
+      { mime: 'image/png', data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d]).toString('base64') },
+    ],
     output: '$ syntax-check Dockerfile: OK',
   });
   assert.ok(saved);
+  assert.equal(saved.imageCount, 2);
+  assert.equal(saved.images.length, 2);
 
   const app = createApp({
     history,
@@ -960,6 +975,18 @@ test('/api/history and /api/agent/check endpoints enforce auth, support search, 
     const listBody = await listRes.json();
     assert.equal(listBody.total, 1);
     assert.equal(listBody.items[0].fileName, 'Dockerfile');
+    assert.equal(listBody.items[0].imageCount, 2);
+
+    const detailRes = await fetch(
+      `http://127.0.0.1:${port}/api/history/11111111-2222-3333-4444-555555555555`,
+      { headers: { cookie } },
+    );
+    assert.equal(detailRes.status, 200);
+    const detailBody = await detailRes.json();
+    assert.equal(detailBody.imageCount, 2);
+    assert.equal(detailBody.images.length, 2);
+    assert.equal(detailBody.images[0].mime, 'image/jpeg');
+    assert.equal(detailBody.images[1].mime, 'image/png');
 
     const openRes = await fetch(
       `http://127.0.0.1:${port}/api/history/11111111-2222-3333-4444-555555555555/open`,

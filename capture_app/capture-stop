@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# capture-stop - Idempotent desktop launcher to stop capture-app cleanly.
+#
+# Requirements satisfied:
+#   - Uses flock to serialize concurrent invocations
+#   - Logs to ~/.local/state/capture-app/stop.log
+#   - Cleans up stale PID files if pgrep -x capture-app returns nothing
+#   - Idempotent: if already stopped, logs & notifies and exits 0
+#   - Inherits and exports XDG_RUNTIME_DIR and PIPEWIRE_REMOTE
+#   - Emits desktop notification via notify-send (no-op fallback if absent)
+#   - Exits 0 on success, 1 on failure with a clear message
+
+set -uo pipefail
+
+STATE_DIR="${HOME}/.local/state/capture-app"
+PID_FILE="${STATE_DIR}/capture-app.pid"
+LOG_FILE="${STATE_DIR}/stop.log"
+LOCK_FILE="${STATE_DIR}/shortcut.lock"
+
+mkdir -p "${STATE_DIR}"
+chmod 0700 "${STATE_DIR}" 2>/dev/null || true
+
+ts() {
+    date '+%Y-%m-%d %H:%M:%S.%3N'
+}
+
+log_msg() {
+    local msg="$1"
+    printf '[%s] [capture-stop] %s\n' "$(ts)" "${msg}" >> "${LOG_FILE}"
+}
+
+notify_user() {
+    local urgency="$1"
+    local summary="$2"
+    local body="$3"
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send -u "${urgency}" -a "capture-app" "${summary}" "${body}" >/dev/null 2>&1 || true
+    fi
+}
+
+# Inherit and export XDG_RUNTIME_DIR and PIPEWIRE_REMOTE
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export PIPEWIRE_REMOTE="${PIPEWIRE_REMOTE:-pipewire-0}"
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -S "${XDG_RUNTIME_DIR}/bus" ]; then
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+fi
+
+# Resolve capture-app binary (prefer latest project build or ~/.local/bin before /usr/local/bin)
+CAPTURE_BIN=""
+if [ -x "${HOME}/Projects/remote_operator_console/capture_app/capture-app" ]; then
+    CAPTURE_BIN="${HOME}/Projects/remote_operator_console/capture_app/capture-app"
+elif [ -x "${HOME}/.local/bin/capture-app" ]; then
+    CAPTURE_BIN="${HOME}/.local/bin/capture-app"
+elif command -v capture-app >/dev/null 2>&1; then
+    CAPTURE_BIN="$(command -v capture-app)"
+elif [ -x "/usr/local/bin/capture-app" ]; then
+    CAPTURE_BIN="/usr/local/bin/capture-app"
+else
+    msg="ERROR: capture-app binary not found in PATH or /usr/local/bin/capture-app"
+    log_msg "${msg}"
+    notify_user critical "Capture Stop Failed" "${msg}"
+    echo "${msg}" >&2
+    exit 1
+fi
+
+# Serialize concurrent start/stop invocations with flock
+exec 9>"${LOCK_FILE}"
+if ! flock -w 15 9; then
+    msg="ERROR: Another capture-start/stop operation is currently in progress (lock timeout)"
+    log_msg "${msg}"
+    notify_user critical "Capture Stop Failed" "${msg}"
+    echo "${msg}" >&2
+    exit 1
+fi
+
+# Stale PID check & live process detection via pgrep -x capture-app
+LIVE_PIDS="$(pgrep -x -u "$(id -u)" capture-app 2>/dev/null || true)"
+if [ -z "${LIVE_PIDS}" ]; then
+    if [ -f "${PID_FILE}" ]; then
+        stale_val="$(cat "${PID_FILE}" 2>/dev/null || echo "unknown")"
+        log_msg "Removing stale PID file ${PID_FILE} (stale PID=${stale_val}, no live capture-app process)"
+        rm -f "${PID_FILE}"
+    fi
+    msg="capture-app is not running (nothing to stop)"
+    log_msg "No-op: ${msg}"
+    notify_user low "Screen Capture Not Running" "${msg}"
+    echo "${msg}"
+    exit 0
+fi
+
+first_pid="$(printf '%s\n' "${LIVE_PIDS}" | head -n1)"
+log_msg "Stopping running capture-app (PID ${first_pid}) via '${CAPTURE_BIN} stop'..."
+
+STOP_OUT="$("${CAPTURE_BIN}" stop 9>&- 2>&1)"
+STOP_RC=$?
+
+while IFS= read -r line; do
+    [ -n "${line}" ] && log_msg "output: ${line}"
+done <<< "${STOP_OUT}"
+
+# Verify process actually exited
+for _ in $(seq 1 30); do
+    if ! pgrep -x -u "$(id -u)" capture-app >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.1
+done
+
+if pgrep -x -u "$(id -u)" capture-app >/dev/null 2>&1; then
+    msg="ERROR: capture-app (PID ${first_pid}) is still running after stop command (rc=${STOP_RC})"
+    log_msg "${msg}"
+    notify_user critical "Screen Capture Stop Failed" "${msg}"
+    echo "${msg}" >&2
+    exit 1
+fi
+
+rm -f "${PID_FILE}" 2>/dev/null || true
+msg="capture-app stopped cleanly (was PID ${first_pid})"
+log_msg "SUCCESS: ${msg}"
+notify_user normal "Screen Capture Stopped" "${msg}"
+echo "${msg}"
+exit 0

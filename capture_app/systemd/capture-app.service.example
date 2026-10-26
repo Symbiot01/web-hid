@@ -1,0 +1,31 @@
+# systemd/capture-app.service.example
+#
+# Reference user-session unit file ONLY.
+# NOTE: By default, capture-app is run directly as a normal user application
+# (`capture-app --config /etc/capture-app/config.ini`), NOT installed as a
+# system-wide systemd service (`systemctl status capture-app` should report
+# "Unit capture-app.service could not be found").
+#
+# If you ever wish to run it under your desktop user session (`systemctl --user`),
+# copy this file to ~/.config/systemd/user/capture-app.service.
+
+[Unit]
+Description=Screen Capture to WHIP Publisher (Portal + PipeWire + VAAPI + libdatachannel)
+After=graphical-session.target pipewire.service xdg-desktop-portal.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/capture-app --config /etc/capture-app/config.ini
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+# Hardening (normal unprivileged user process)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=graphical-session.target

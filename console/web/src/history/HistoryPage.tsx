@@ -26,8 +26,14 @@ type HistorySummary = {
   passCount: number;
   caseCount: number;
   messageCount: number;
+  imageCount?: number;
   createdAt: number;
   updatedAt: number;
+};
+
+type HistoryImage = {
+  mime: string;
+  data: string;
 };
 
 type HistoryDetail = {
@@ -52,6 +58,8 @@ type HistoryDetail = {
     timeMs?: number;
     status: TestStatus;
   }>;
+  images?: HistoryImage[];
+  imageCount?: number;
   output: string;
   passCount: number;
   caseCount: number;
@@ -70,7 +78,7 @@ const TYPE_FILTERS: Array<{ key: string; label: string }> = [
   { key: 'javascript', label: 'JS' },
 ];
 
-type DetailTab = 'overview' | 'code' | 'chat' | 'cases';
+type DetailTab = 'overview' | 'images' | 'code' | 'chat' | 'cases';
 
 function formatTimestamp(ms: number): string {
   if (!ms) return '';
@@ -101,6 +109,7 @@ export function HistoryPage() {
   const [openingIde, setOpeningIde] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -162,6 +171,7 @@ export function HistoryPage() {
   }, [ready, query, typeFilter, fetchList]);
 
   useEffect(() => {
+    setLightboxIndex(null);
     if (!ready || !selectedId) {
       setDetail(null);
       return;
@@ -173,7 +183,14 @@ export function HistoryPage() {
     })
       .then((res) => (res.ok ? res.json() : null))
       .then((payload: HistoryDetail | null) => {
-        if (!cancelled) setDetail(payload);
+        if (!cancelled) {
+          setDetail(payload);
+          setActiveTab((prev) =>
+            prev === 'images' && (!payload?.images || payload.images.length === 0)
+              ? 'overview'
+              : prev,
+          );
+        }
       })
       .catch(() => {
         if (!cancelled) setDetail(null);
@@ -185,6 +202,22 @@ export function HistoryPage() {
       cancelled = true;
     };
   }, [ready, selectedId]);
+
+  useEffect(() => {
+    if (lightboxIndex === null || !detail?.images || detail.images.length === 0) return;
+    const totalImages = detail.images.length;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setLightboxIndex(null);
+      } else if (event.key === 'ArrowRight') {
+        setLightboxIndex((prev) => (prev === null ? null : (prev + 1) % totalImages));
+      } else if (event.key === 'ArrowLeft') {
+        setLightboxIndex((prev) => (prev === null ? null : (prev - 1 + totalImages) % totalImages));
+      }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [lightboxIndex, detail?.images]);
 
   async function handleOpenInIde() {
     if (!detail || openingIde) return;
@@ -314,6 +347,14 @@ export function HistoryPage() {
                         <span>
                           {item.passCount}/{item.caseCount} pass
                         </span>
+                        {item.imageCount && item.imageCount > 0 ? (
+                          <>
+                            <span>·</span>
+                            <span>
+                              {item.imageCount} img{item.imageCount === 1 ? '' : 's'}
+                            </span>
+                          </>
+                        ) : null}
                         <span>·</span>
                         <span>{item.messageCount} msgs</span>
                         <span>·</span>
@@ -354,6 +395,11 @@ export function HistoryPage() {
                     <span className="ide-meta-chip">
                       {detail.passCount}/{detail.caseCount} cases passed
                     </span>
+                    {detail.images && detail.images.length > 0 ? (
+                      <span className="ide-meta-chip">
+                        {detail.images.length} screenshot{detail.images.length === 1 ? '' : 's'}
+                      </span>
+                    ) : null}
                     <span className="muted" style={{ fontSize: '0.75rem' }}>
                       Updated {formatTimestamp(detail.updatedAt)}
                     </span>
@@ -395,6 +441,17 @@ export function HistoryPage() {
                 >
                   Overview &amp; Solution
                 </button>
+                {detail.images && detail.images.length > 0 ? (
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={activeTab === 'images'}
+                    className={`ide-tab${activeTab === 'images' ? ' active' : ''}`}
+                    onClick={() => setActiveTab('images')}
+                  >
+                    Question Images ({detail.images.length})
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   role="tab"
@@ -427,6 +484,34 @@ export function HistoryPage() {
               <div className="hist-body">
                 {activeTab === 'overview' ? (
                   <>
+                    {detail.images && detail.images.length > 0 ? (
+                      <section className="hist-card">
+                        <div className="hist-card-head">
+                          <h3>Input Question Screenshots ({detail.images.length})</h3>
+                          <span className="muted" style={{ fontSize: '0.75rem' }}>
+                            Click any screenshot to inspect full size
+                          </span>
+                        </div>
+                        <div className="hist-images-grid">
+                          {detail.images.map((img, idx) => (
+                            <button
+                              key={`thumb-${idx}`}
+                              type="button"
+                              className="hist-image-thumb"
+                              onClick={() => setLightboxIndex(idx)}
+                              title={`Open screenshot #${idx + 1}`}
+                            >
+                              <img
+                                src={`data:${img.mime};base64,${img.data}`}
+                                alt={`Question screenshot ${idx + 1}`}
+                                loading="lazy"
+                              />
+                              <span className="hist-image-label">Part #{idx + 1}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </section>
+                    ) : null}
                     <section className="hist-card">
                       <h3>Problem Specification</h3>
                       {detail.format ? (
@@ -462,6 +547,35 @@ export function HistoryPage() {
                       </div>
                     </section>
                   </>
+                ) : null}
+
+                {activeTab === 'images' && detail.images && detail.images.length > 0 ? (
+                  <div className="hist-images-stack">
+                    {detail.images.map((img, idx) => (
+                      <section key={`full-img-${idx}`} className="hist-card">
+                        <div className="hist-card-head">
+                          <h3>
+                            Screenshot #{idx + 1} of {detail.images?.length}
+                          </h3>
+                          <button
+                            type="button"
+                            className="btn ghost ide-mini"
+                            onClick={() => setLightboxIndex(idx)}
+                          >
+                            Fullscreen
+                          </button>
+                        </div>
+                        <div className="hist-image-full-wrap">
+                          <img
+                            src={`data:${img.mime};base64,${img.data}`}
+                            alt={`Question screenshot ${idx + 1}`}
+                            className="hist-image-full"
+                            onClick={() => setLightboxIndex(idx)}
+                          />
+                        </div>
+                      </section>
+                    ))}
+                  </div>
                 ) : null}
 
                 {activeTab === 'code' ? (
@@ -551,6 +665,80 @@ export function HistoryPage() {
           )}
         </main>
       </div>
+
+      {lightboxIndex !== null &&
+      detail?.images &&
+      detail.images[lightboxIndex] ? (
+        <div
+          className="hist-lightbox"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Question screenshot ${lightboxIndex + 1} of ${detail.images.length}`}
+          onClick={() => setLightboxIndex(null)}
+        >
+          <div className="hist-lightbox-bar" onClick={(e) => e.stopPropagation()}>
+            <span className="hist-lightbox-title">
+              Screenshot #{lightboxIndex + 1} of {detail.images.length}
+            </span>
+            <div className="hist-lightbox-actions">
+              {detail.images.length > 1 ? (
+                <>
+                  <button
+                    type="button"
+                    className="btn ghost ide-mini"
+                    onClick={() =>
+                      setLightboxIndex(
+                        (prev) =>
+                          prev === null || !detail.images
+                            ? null
+                            : (prev - 1 + detail.images.length) % detail.images.length,
+                      )
+                    }
+                  >
+                    Prev
+                  </button>
+                  <button
+                    type="button"
+                    className="btn ghost ide-mini"
+                    onClick={() =>
+                      setLightboxIndex(
+                        (prev) =>
+                          prev === null || !detail.images
+                            ? null
+                            : (prev + 1) % detail.images.length,
+                      )
+                    }
+                  >
+                    Next
+                  </button>
+                </>
+              ) : null}
+              <a
+                href={`data:${detail.images[lightboxIndex].mime};base64,${detail.images[lightboxIndex].data}`}
+                download={`${detail.title ? detail.title.replace(/[^a-zA-Z0-9_-]+/g, '-') : 'question'}-part-${lightboxIndex + 1}.${detail.images[lightboxIndex].mime === 'image/png' ? 'png' : detail.images[lightboxIndex].mime === 'image/webp' ? 'webp' : 'jpg'}`}
+                className="btn ghost ide-mini"
+                style={{ textDecoration: 'none' }}
+              >
+                Download
+              </a>
+              <button
+                type="button"
+                className="btn primary ide-mini"
+                onClick={() => setLightboxIndex(null)}
+              >
+                Close (Esc)
+              </button>
+            </div>
+          </div>
+          <div className="hist-lightbox-body" onClick={(e) => e.stopPropagation()}>
+            <img
+              src={`data:${detail.images[lightboxIndex].mime};base64,${detail.images[lightboxIndex].data}`}
+              alt={`Question screenshot ${lightboxIndex + 1}`}
+              className="hist-lightbox-img"
+            />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

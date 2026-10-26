@@ -345,6 +345,15 @@ function createCameraControl(options = {}) {
     setVideo(false);
   }
 
+  function suspend() {
+    watchers.clear();
+    if (stopTimer) {
+      cancel(stopTimer);
+      stopTimer = null;
+    }
+    setVideo(false);
+  }
+
   function resume() {
     held = false;
   }
@@ -459,7 +468,7 @@ function createCameraControl(options = {}) {
     return null;
   }
 
-  return { snapshot, watch, release, resume, command, applyStatus, submitResult, drain, hold, sweep };
+  return { snapshot, watch, release, suspend, resume, command, applyStatus, submitResult, drain, hold, sweep };
 }
 
 module.exports = {

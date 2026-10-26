@@ -14,7 +14,7 @@ const CASE_LIMIT = 12;
 const TEXT_LIMIT = 8_000;
 const SOURCE_LIMIT = 64 * 1024;
 const IMAGE_MAX = 4 * 1024 * 1024;
-const MAX_IMAGES = 6;
+const MAX_IMAGES = 15;
 const OUTPUT_LIMIT = 12_000;
 const THINKING_LIMIT = 6_000;
 const THOUGHT_LOG_LIMIT = 16;
@@ -1281,7 +1281,13 @@ function createAgentControl({ apiKey, model, generate, run, onSaveHistory }) {
 
   function persistHistory() {
     if (typeof onSaveHistory !== 'function') return;
-    if (!state || !state.problemId || !state.statement || !state.source) return;
+    if (
+      !state ||
+      !state.problemId ||
+      (!state.statement && !state.source && (!Array.isArray(state.images) || state.images.length === 0))
+    ) {
+      return;
+    }
     try {
       onSaveHistory({
         id: state.problemId,
@@ -1292,9 +1298,9 @@ function createAgentControl({ apiKey, model, generate, run, onSaveHistory }) {
         signature: redact(state.signature || '', secret),
         format: redact(state.format || '', secret),
         phase: state.phase || 'solved',
-        statement: redact(state.statement, secret),
+        statement: redact(state.statement || '', secret),
         approach: redact(state.approach || '', secret),
-        source: redact(state.source, secret),
+        source: redact(state.source || '', secret),
         messages: state.messages.map((item) => ({
           role: item.role === 'user' ? 'user' : 'assistant',
           text: redact(item.text, secret),
@@ -1309,6 +1315,12 @@ function createAgentControl({ apiKey, model, generate, run, onSaveHistory }) {
           timeMs: typeof item.timeMs === 'number' ? item.timeMs : 0,
           status: item.status || 'idle',
         })),
+        images: Array.isArray(state.images)
+          ? state.images.slice(0, MAX_IMAGES).map((img) => ({
+              mime: img.mime,
+              data: img.data,
+            }))
+          : [],
         output: redact(state.output || '', secret),
       });
     } catch {
@@ -1903,7 +1915,10 @@ function createAgentControl({ apiKey, model, generate, run, onSaveHistory }) {
           };
         })
       : [];
-    state.images = [];
+    const restoredImages = Array.isArray(item.images)
+      ? normalizeImages({ images: item.images })
+      : { ok: false, images: [] };
+    state.images = restoredImages.ok ? restoredImages.images : [];
     state.source = typeof item.source === 'string' ? cleanSource(item.source, state.problemType) : '';
     state.approach = clip(sanitizeTextField(item.approach), 1_000);
     state.hint = '';
@@ -2034,6 +2049,7 @@ function createAgentControl({ apiKey, model, generate, run, onSaveHistory }) {
               ? `Those sample cases do not follow from the statement. ${checked.reason}`
               : 'Those sample cases do not follow from the statement.',
           );
+          persistHistory();
           return snapshot();
         }
         state.casesVerified = true;

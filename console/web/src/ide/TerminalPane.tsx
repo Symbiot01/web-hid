@@ -25,6 +25,8 @@ type Props = {
   onAddCase: () => void;
   onRemoveCase: (id: string) => void;
   onChangeCase: (id: string, patch: Partial<Pick<TestCase, 'input' | 'expected'>>) => void;
+  streamSource: 'cam' | 'desk';
+  onStreamSource: (source: 'cam' | 'desk') => void;
   stream: 2 | 3;
   onStream: (stream: 2 | 3) => void;
   onOpenStream: () => void;
@@ -55,6 +57,8 @@ export function TerminalPane({
   onAddCase,
   onRemoveCase,
   onChangeCase,
+  streamSource,
+  onStreamSource,
   stream,
   onStream,
   onOpenStream,
@@ -142,6 +146,8 @@ export function TerminalPane({
       <div className={tab === 'camera' ? 'ide-fill' : 'ide-hidden'}>
         <CameraPanel
           active={tab === 'camera'}
+          streamSource={streamSource}
+          onStreamSource={onStreamSource}
           stream={stream}
           onStream={onStream}
           onOpenStream={onOpenStream}

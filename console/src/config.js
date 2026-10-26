@@ -74,7 +74,7 @@ function loadConfig() {
     console.error('[fatal] DEVICE_TOKEN is invalid');
     process.exit(1);
   }
-  const captureToken = process.env.CAPTURE_TOKEN || '';
+  const captureToken = process.env.CAPTURE_TOKEN || process.env.BRIDGE_TOKEN || '';
   if (captureToken && Buffer.byteLength(captureToken, 'utf8') < 16) {
     console.error('[fatal] CAPTURE_TOKEN must be at least 16 characters when set');
     process.exit(1);

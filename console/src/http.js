@@ -94,7 +94,7 @@ function createApp(opts) {
         return executeRun(body);
       },
     });
-  const agentJson = express.json({ limit: '24mb' });
+  const agentJson = express.json({ limit: '64mb' });
   const agentLimiter = rateLimit({
     windowMs: 60 * 1000,
     max: 12,
@@ -209,8 +209,16 @@ function createApp(opts) {
       if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
         return res.status(400).json({ error: 'Expected an SDP offer' });
       }
+      const rawSource = req.query.source;
+      if (rawSource !== undefined && rawSource !== 'cam' && rawSource !== 'desk') {
+        return res.status(400).json({ error: 'Invalid stream source' });
+      }
+      const targetWhepUrl =
+        rawSource === 'desk'
+          ? config.streamDeskWhepUrl || 'http://127.0.0.1:8889/desk/whep'
+          : config.streamWhepUrl;
       try {
-        const opened = await openWhep(config.streamWhepUrl, req.body);
+        const opened = await openWhep(targetWhepUrl, req.body);
         if (opened.id) res.setHeader('Location', `/api/stream/whep/${opened.id}`);
         res.setHeader('Content-Type', 'application/sdp');
         return res.status(201).send(opened.answer);
@@ -320,23 +328,32 @@ function createApp(opts) {
   });
 
   app.get('/api/camera', requireSession(config.sessionSecret), (_req, res) => {
-    res.status(200).json(camera.snapshot());
+    const media = streamStatus();
+    res.status(200).json({
+      ...camera.snapshot(),
+      capture: capture.status(media && media.desk),
+    });
   });
 
   app.post('/api/camera/watch', requireSession(config.sessionSecret), watchLimiter, (req, res) => {
     const problem = camera.watch(req.body);
     if (problem) return res.status(400).json({ error: problem });
+    capture.suspend();
+    stopIngest('desk');
     return res.status(200).json({ ok: true });
   });
 
   app.post('/api/camera/stop', requireSession(config.sessionSecret), watchLimiter, (_req, res) => {
     camera.release();
+    capture.release();
     stopIngest('cam');
+    stopIngest('desk');
     return res.status(200).json({ ok: true });
   });
 
   app.post('/api/camera/resume', requireSession(config.sessionSecret), watchLimiter, (_req, res) => {
     camera.resume();
+    capture.resume();
     return res.status(200).json({ ok: true });
   });
 
@@ -423,6 +440,28 @@ function createApp(opts) {
     res.status(200).json(capture.status(media && media.desk));
   });
 
+  app.post('/api/capture/watch', requireSession(config.sessionSecret), watchLimiter, (req, res) => {
+    const problem = capture.watch(req.body);
+    if (problem) return res.status(400).json({ error: problem });
+    camera.suspend();
+    stopIngest('cam');
+    return res.status(200).json({ ok: true });
+  });
+
+  app.post('/api/capture/stop', requireSession(config.sessionSecret), watchLimiter, (_req, res) => {
+    capture.release();
+    camera.release();
+    stopIngest('desk');
+    stopIngest('cam');
+    return res.status(200).json({ ok: true });
+  });
+
+  app.post('/api/capture/resume', requireSession(config.sessionSecret), watchLimiter, (_req, res) => {
+    capture.resume();
+    camera.resume();
+    return res.status(200).json({ ok: true });
+  });
+
   app.post('/api/capture/snap', requireSession(config.sessionSecret), captureLimiter, async (_req, res) => {
     const result = await capture.requestSnap();
     if (result.status !== 200 || !result.body) {
@@ -434,8 +473,9 @@ function createApp(opts) {
     return res.status(200).send(result.body);
   });
 
-  app.post('/api/capture/frame', requireSession(config.sessionSecret), captureLimiter, async (_req, res) => {
-    const rtsp = config.captureRtspCam || 'rtsp://127.0.0.1:8554/cam';
+  app.post('/api/capture/frame', requireSession(config.sessionSecret), captureLimiter, async (req, res) => {
+    const baseRtsp = config.captureRtspCam || 'rtsp://127.0.0.1:8554/cam';
+    const rtsp = req.query.source === 'desk' ? baseRtsp.replace(/\/cam$/, '/desk') : baseRtsp;
     const result = await grabFrame(rtsp);
     if (!result.ok || !result.body) {
       const message = result.status === 504 ? 'Frame timed out' : 'No frame';
@@ -461,6 +501,13 @@ function createApp(opts) {
     const waitMs = Number.isFinite(raw) ? Math.min(15, Math.max(1, Math.trunc(raw))) * 1000 : 8000;
     capture.poll(res, waitMs);
     return undefined;
+  });
+
+  app.post('/api/capture/status', captureAgentLimiter, express.json({ limit: '4kb' }), (req, res) => {
+    if (!requireCapture(req, res)) return undefined;
+    const problem = capture.applyStatus(req.body);
+    if (problem) return res.status(400).json({ error: problem });
+    return res.status(200).json({ ok: true });
   });
 
   app.post(

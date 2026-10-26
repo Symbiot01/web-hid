@@ -10,6 +10,8 @@ const RETRY_MS = [1000, 2000, 3500];
 type Props = {
   active: boolean;
   keepWarm: boolean;
+  source: 'cam' | 'desk';
+  onSource: (source: 'cam' | 'desk') => void;
   stream: 2 | 3;
   reconnectSeq: number;
   liveMode: LiveMode | null;
@@ -21,6 +23,11 @@ type Props = {
 };
 
 type RecentKey = { id: number; label: string };
+
+type SourceAvailability = {
+  camOnline: boolean;
+  deskOnline: boolean;
+};
 
 function typingHudLabel(event: KeyboardEvent): string | null {
   if (!isTypingCode(event.code)) return null;
@@ -36,6 +43,8 @@ function typingHudLabel(event: KeyboardEvent): string | null {
 export function StreamPane({
   active,
   keepWarm,
+  source,
+  onSource,
   stream,
   reconnectSeq,
   liveMode,
@@ -49,12 +58,18 @@ export function StreamPane({
   const [status, setStatus] = useState<Status>('offline');
   const [detail, setDetail] = useState('No signal');
   const [recentKeys, setRecentKeys] = useState<RecentKey[]>([]);
+  const [availability, setAvailability] = useState<SourceAvailability>({
+    camOnline: false,
+    deskOnline: false,
+  });
   const keySeq = useRef(0);
   const stageRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef(stream);
+  const sourceRef = useRef(source);
   const liveRef = useRef(liveMode);
   const sendRef = useRef(sendFrame);
   streamRef.current = stream;
+  sourceRef.current = source;
   liveRef.current = liveMode;
   sendRef.current = sendFrame;
 
@@ -82,20 +97,44 @@ export function StreamPane({
     let stop = false;
     const beat = () => {
       if (stop) return;
-      void fetch('/api/camera/watch', {
+      const endpoint = source === 'desk' ? '/api/capture/watch' : '/api/camera/watch';
+      const payload = source === 'desk' ? { id } : { id, stream: streamRef.current };
+      void fetch(endpoint, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, stream: streamRef.current }),
+        body: JSON.stringify(payload),
       }).catch(() => undefined);
     };
+    const pollAvailability = async () => {
+      try {
+        const res = await fetch('/api/camera', { credentials: 'same-origin' });
+        if (!res.ok || stop) return;
+        const body = (await res.json()) as {
+          bridge?: string;
+          ingest?: boolean;
+          capture?: { agent?: string; desk?: boolean };
+        };
+        if (stop) return;
+        setAvailability({
+          camOnline: body.bridge === 'online' || Boolean(body.ingest),
+          deskOnline: body.capture?.agent === 'online' || Boolean(body.capture?.desk),
+        });
+      } catch {
+        // ignore transient poll error
+      }
+    };
     beat();
-    const timer = window.setInterval(beat, 3000);
+    void pollAvailability();
+    const timer = window.setInterval(() => {
+      beat();
+      void pollAvailability();
+    }, 3000);
     return () => {
       stop = true;
       window.clearInterval(timer);
     };
-  }, [active, keepWarm, stream]);
+  }, [active, keepWarm, source, stream]);
 
   useEffect(() => {
     if (!active) {
@@ -123,7 +162,7 @@ export function StreamPane({
     const connect = async () => {
       if (stopped) return;
       setStatus('connecting');
-      setDetail('Connecting…');
+      setDetail(sourceRef.current === 'desk' ? 'Connecting to Capture App…' : 'Connecting to Camera…');
       try {
         const next = await startWhep((event) => {
           if (stopped || mediaStream.getTracks().some((track) => track.id === event.track.id)) return;
@@ -132,7 +171,7 @@ export function StreamPane({
             video.srcObject = mediaStream;
             void video.play().catch(() => undefined);
           }
-        });
+        }, sourceRef.current);
         if (stopped) {
           await next.stop();
           return;
@@ -144,7 +183,11 @@ export function StreamPane({
           if (state === 'connected') {
             retry = 0;
             setStatus('live');
-            setDetail(`Live · Stream ${streamRef.current}`);
+            setDetail(
+              sourceRef.current === 'desk'
+                ? 'Live · Capture App (Screen)'
+                : `Live · Camera (Stream ${streamRef.current})`,
+            );
             return;
           }
           if (state === 'disconnected') {
@@ -186,7 +229,7 @@ export function StreamPane({
       for (const track of mediaStream.getTracks()) track.stop();
       void session?.stop();
     };
-  }, [active, reconnectSeq, stream, suspended]);
+  }, [active, reconnectSeq, source, stream, suspended]);
 
   useEffect(() => {
     if (!active || !liveMode) return;
@@ -293,6 +336,29 @@ export function StreamPane({
           <span className="ide-stream-dot" aria-hidden="true" />
           {detail}
         </span>
+        <div
+          className="ide-stream-source-switch"
+          role="group"
+          aria-label="Select video source (only one streams at a time to save Wi-Fi bandwidth)"
+          style={{ display: 'inline-flex', gap: '0.35rem', alignItems: 'center', marginLeft: '0.5rem' }}
+        >
+          <button
+            type="button"
+            className={`btn ${source === 'cam' ? 'primary' : 'ghost'} ide-mini`}
+            onClick={() => onSource('cam')}
+            title="Switch to LookCam Camera (pauses Capture App stream to save Wi-Fi bandwidth)"
+          >
+            Camera ({availability.camOnline ? 'Available' : 'Offline'})
+          </button>
+          <button
+            type="button"
+            className={`btn ${source === 'desk' ? 'primary' : 'ghost'} ide-mini`}
+            onClick={() => onSource('desk')}
+            title="Switch to Capture App Screen Stream (pauses Camera stream to save Wi-Fi bandwidth)"
+          >
+            Capture App ({availability.deskOnline ? 'Available' : 'Offline'})
+          </button>
+        </div>
         {liveMode ? (
           <span className="ide-stream-note">Click video to lock mouse pointer · Esc unlocks</span>
         ) : null}

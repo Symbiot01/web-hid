@@ -22,7 +22,7 @@ import {
 type ImagePayload = { mime: string; base64: string };
 type ImageItem = ImagePayload & { id: string; name: string };
 
-const MAX_IMAGES = 6;
+const MAX_IMAGES = 15;
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 

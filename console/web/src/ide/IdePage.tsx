@@ -124,6 +124,7 @@ export function IdePage({ busy, onLogout }: Props) {
   const [confirmLogout, setConfirmLogout] = useState(false);
   const [running, setRunning] = useState<'program' | 'tests' | null>(null);
   const [editorView, setEditorView] = useState<'editor' | 'stream'>('editor');
+  const [streamSource, setStreamSource] = useState<'cam' | 'desk'>('cam');
   const [cameraStream, setCameraStream] = useState<2 | 3>(2);
   const [streamReconnectSeq, setStreamReconnectSeq] = useState(0);
   const [streamStopped, setStreamStopped] = useState(false);
@@ -293,6 +294,15 @@ export function IdePage({ busy, onLogout }: Props) {
     setLiveMode(null);
   }
 
+  function selectStreamSource(next: 'cam' | 'desk') {
+    setStreamSource(next);
+    if (streamStopped) {
+      void resumeStream(true);
+    } else {
+      setStreamReconnectSeq((seq) => seq + 1);
+    }
+  }
+
   function showView(next: 'editor' | 'stream') {
     setEditorView(next);
     if (next !== 'stream') {
@@ -366,7 +376,8 @@ export function IdePage({ busy, onLogout }: Props) {
         if (blob) sourceLabel = 'Live stream PNG';
       }
       if (!blob) {
-        const response = await fetch(kind === 'frame' ? '/api/capture/frame' : '/api/capture/snap', {
+        const frameEndpoint = `/api/capture/frame?source=${encodeURIComponent(streamSource)}`;
+        const response = await fetch(kind === 'frame' ? frameEndpoint : '/api/capture/snap', {
           method: 'POST',
           credentials: 'same-origin',
         });
@@ -900,6 +911,8 @@ export function IdePage({ busy, onLogout }: Props) {
                 keepStreamWarm={bottomTab === 'camera'}
                 streamSuspended={streamStopped}
                 onView={showView}
+                streamSource={streamSource}
+                onStreamSource={selectStreamSource}
                 stream={cameraStream}
                 reconnectSeq={streamReconnectSeq}
                 continuous={hidContinuous}
@@ -939,6 +952,8 @@ export function IdePage({ busy, onLogout }: Props) {
                     prev.map((item) => (item.id === id ? { ...item, ...patch, status: 'idle', actual: '' } : item)),
                   );
                 }}
+                streamSource={streamSource}
+                onStreamSource={selectStreamSource}
                 stream={cameraStream}
                 onStream={setCameraStream}
                 onOpenStream={() => {

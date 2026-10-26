@@ -53,7 +53,7 @@ export const SCREEN_MAP: ScreenQuadrant[] = [
     title: 'AI Coding Agent & Ask Mode',
     tabs: ['Ask', 'Agent', 'New problem'],
     summary:
-      'Reads problem text or up to 6 screenshots, builds a C++ test harness, writes the solution into main.cpp, and verifies it against sample cases.',
+      'Reads problem text or up to 15 screenshots, builds a C++ test harness, writes the solution into main.cpp, and verifies it against sample cases.',
     highlights: [
       'Ask mode answers questions about the open C++ file without changing your editor code.',
       'Agent mode runs the 4-step automated solver: 1. Problem -> 2. Cases -> 3. Wrapper -> 4. Solve & Test.',
@@ -186,7 +186,7 @@ python3 scripts/lookcam_bridge.py`,
           'You never need to transcribe a problem by hand. Choose whichever capture method fits your setup:',
         bullets: [
           'Method 1 — Direct Camera Snap (Fastest): In the bottom "Camera" tab (or by right-clicking the "Stream" tab), click "+ Snap Frame -> Agent" to grab a crisp PNG directly from the live video player, or "+ Snap Agent -> Agent" to trigger the remote capture agent. Check "Start new problem on capture" if you want it to reset the previous problem automatically.',
-          'Method 2 — Multi-Screenshot Paste or Drag & Drop: Take up to 6 screenshots (for long scrolling problems) and press Ctrl+V directly inside the Agent message box, or drag and drop PNG/JPEG/WebP files onto the Agent panel.',
+          'Method 2 — Multi-Screenshot Paste or Drag & Drop: Take up to 15 screenshots (for long scrolling problems) and press Ctrl+V directly inside the Agent message box, or drag and drop PNG/JPEG/WebP files onto the Agent panel.',
           'Method 3 — Text & Starter Code: Paste problem descriptions, constraints, or a required class/function template into the message box and press Ctrl+Enter (or click Send).',
         ],
         tip: 'If a problem statement spans two pages, snap the first page, scroll the target screen, and snap the second page before clicking Send. The Agent combines all attached images in order (1. part-1, 2. part-2).',

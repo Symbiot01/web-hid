@@ -2,6 +2,17 @@ import { useEffect, useState } from 'react';
 
 type Check = { name: string; ok: boolean; detail: string };
 
+type CaptureStatus = {
+  configured?: boolean;
+  agent: 'online' | 'offline';
+  video?: 'wanted' | 'off';
+  streaming?: boolean;
+  desk?: boolean;
+  watching?: boolean;
+  fps?: number;
+  bitrateKbps?: number;
+};
+
 type CameraStatus = {
   bridge: 'online' | 'offline';
   phase: string;
@@ -13,6 +24,7 @@ type CameraStatus = {
   ingest: boolean;
   stream: 2 | 3;
   last: { name: string; ok: boolean; detail: string } | null;
+  capture?: CaptureStatus;
 };
 
 type CommandResult = {
@@ -68,6 +80,8 @@ const EMPTY_LED: LedForm = {
 
 type Props = {
   active: boolean;
+  streamSource: 'cam' | 'desk';
+  onStreamSource: (source: 'cam' | 'desk') => void;
   stream: 2 | 3;
   onStream: (stream: 2 | 3) => void;
   onOpenStream: () => void;
@@ -76,7 +90,17 @@ type Props = {
   onSnap: (kind: 'frame' | 'agent', target?: 'agent' | 'save', resetFirst?: boolean) => Promise<string>;
 };
 
-export function CameraPanel({ active, stream, onStream, onOpenStream, onStopStream, streamStopped, onSnap }: Props) {
+export function CameraPanel({
+  active,
+  streamSource,
+  onStreamSource,
+  stream,
+  onStream,
+  onOpenStream,
+  onStopStream,
+  streamStopped,
+  onSnap,
+}: Props) {
   const [status, setStatus] = useState<CameraStatus | null>(null);
   const [output, setOutput] = useState('Ready. Use the top bar to Snap Frame or Snap Agent directly into the Agent pane.');
   const [busy, setBusy] = useState(false);
@@ -188,9 +212,68 @@ export function CameraPanel({ active, stream, onStream, onOpenStream, onStopStre
   const bridgeOnline = status?.bridge === 'online';
   const cameraOn = status?.cameraVideo === 'on';
   const ingestOn = Boolean(status?.ingest);
+  const captureOnline = status?.capture?.agent === 'online';
+  const captureStreaming = Boolean(status?.capture?.streaming || status?.capture?.desk);
 
   return (
     <aside className="ide-cam">
+      <section className="ide-cam-card" aria-label="Video Source Selection">
+        <div className="ide-hid-head">
+          <strong className="ide-cam-card-title">
+            Video Source (Single Active Stream — Preserves Wi-Fi Bandwidth)
+          </strong>
+          <span className="ide-hid-stat">
+            Active: {streamStopped ? 'Stopped (0 kbps)' : streamSource === 'desk' ? 'Capture App (Screen)' : 'Camera (LookCam)'}
+          </span>
+        </div>
+        <div className="ide-hid-pills" style={{ marginBottom: '0.5rem' }}>
+          <span className={`ide-hid-pill${bridgeOnline ? ' ok' : ''}`}>
+            Camera Bridge: {bridgeOnline ? (cameraOn || ingestOn ? 'streaming' : 'available (standby)') : 'offline'}
+          </span>
+          <span className={`ide-hid-pill${captureOnline ? ' ok' : ''}`}>
+            Capture App: {captureOnline ? (captureStreaming ? 'streaming' : 'available (standby)') : 'offline'}
+          </span>
+        </div>
+        <div className="ide-cam-actions" style={{ marginBottom: 0 }}>
+          <button
+            type="button"
+            className={`btn ${streamSource === 'cam' && !streamStopped ? 'primary' : 'ghost'} ide-mini`}
+            onClick={() => {
+              onStreamSource('cam');
+              onOpenStream();
+            }}
+            title="Connect to LookCam Camera and suspend Capture App stream"
+          >
+            Connect Camera ({bridgeOnline ? 'Available' : 'Offline'})
+          </button>
+          <button
+            type="button"
+            className={`btn ${streamSource === 'desk' && !streamStopped ? 'primary' : 'ghost'} ide-mini`}
+            onClick={() => {
+              onStreamSource('desk');
+              onOpenStream();
+            }}
+            title="Connect to Capture App (Screen) and suspend Camera stream"
+          >
+            Connect Capture App ({captureOnline ? 'Available' : 'Offline'})
+          </button>
+          <button
+            type="button"
+            className="btn danger ide-mini"
+            disabled={stopping || streamStopped}
+            onClick={() => {
+              setStopping(true);
+              void onStopStream()
+                .then((message) => setOutput(message))
+                .finally(() => setStopping(false));
+            }}
+            title="Stop all video streaming (0 Wi-Fi bandwidth)"
+          >
+            {stopping ? 'Stopping…' : 'Stop Both (Standby)'}
+          </button>
+        </div>
+      </section>
+
       <section className="ide-cam-card" aria-label="Snap Frame and Snap Agent">
         <div className="ide-hid-head">
           <strong className="ide-cam-card-title">Capture & Send Directly to Agent</strong>

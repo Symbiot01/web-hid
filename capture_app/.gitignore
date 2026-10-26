@@ -1,0 +1,5 @@
+capture-app
+src/*.o
+tests/test_config
+tests/test_queue
+sysroot/
