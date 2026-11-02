@@ -68,6 +68,7 @@ export function StreamPane({
   const sourceRef = useRef(source);
   const onSourceRef = useRef(onSource);
   const userSelectedSourceRef = useRef(false);
+  const didAutoSelectSourceRef = useRef(false);
   const liveRef = useRef(liveMode);
   const sendRef = useRef(sendFrame);
   streamRef.current = stream;
@@ -122,10 +123,14 @@ export function StreamPane({
         const camOnline = body.bridge === 'online' || Boolean(body.ingest);
         const deskOnline = body.capture?.agent === 'online' || Boolean(body.capture?.desk);
         setAvailability({ camOnline, deskOnline });
-        if (!userSelectedSourceRef.current) {
+        // Auto-pick once only. Re-running every poll flips cam/desk watches and
+        // suspends WHIP every few seconds (Live badge with black video).
+        if (!userSelectedSourceRef.current && !didAutoSelectSourceRef.current) {
           if (deskOnline && !camOnline && sourceRef.current !== 'desk') {
+            didAutoSelectSourceRef.current = true;
             onSourceRef.current('desk');
           } else if (camOnline && !deskOnline && sourceRef.current !== 'cam') {
+            didAutoSelectSourceRef.current = true;
             onSourceRef.current('cam');
           }
         }

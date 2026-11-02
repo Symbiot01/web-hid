@@ -124,7 +124,7 @@ export function IdePage({ busy, onLogout }: Props) {
   const [confirmLogout, setConfirmLogout] = useState(false);
   const [running, setRunning] = useState<'program' | 'tests' | null>(null);
   const [editorView, setEditorView] = useState<'editor' | 'stream'>('editor');
-  const [streamSource, setStreamSource] = useState<'cam' | 'desk'>('cam');
+  const [streamSource, setStreamSource] = useState<'cam' | 'desk'>('desk');
   const [cameraStream, setCameraStream] = useState<2 | 3>(2);
   const [streamReconnectSeq, setStreamReconnectSeq] = useState(0);
   const [streamStopped, setStreamStopped] = useState(false);

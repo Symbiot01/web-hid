@@ -23,7 +23,9 @@ webrtcAddress: :8889
 webrtcEncryption: no
 webrtcLocalUDPAddress: :8189
 
-# Helps browsers/Pi behind NAT. Also set MTX_WEBRTCADDITIONALHOSTS in Coolify.
+# Public ICE host for GCP VM (keep in sync with Coolify MTX_WEBRTCADDITIONALHOSTS).
+# Without this, MediaMTX advertises docker/private candidates and browsers get Live/black video.
+webrtcAdditionalHosts: [34.14.214.169, mediarelay.sahilpatel.online]
 webrtcICEServers2:
   - url: stun:stun.l.google.com:19302
 

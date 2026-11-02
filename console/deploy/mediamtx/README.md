@@ -15,7 +15,7 @@ Config is **copied into the image** via `Dockerfile` (no bind-mount of `mediamtx
 4. Env (required for WebRTC ICE):
 
    ```
-   MTX_WEBRTCADDITIONALHOSTS=mediarelay.sahilpatel.online,34.47.241.10
+   MTX_WEBRTCADDITIONALHOSTS=mediarelay.sahilpatel.online,34.14.214.169
    ```
 
 5. VPS / GCP firewall: **443/tcp**, **8189/udp** (WebRTC), **8890/udp** (SRT Pi ingest, rule `allow-testin-srt`).  
