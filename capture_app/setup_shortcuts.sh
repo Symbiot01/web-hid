@@ -15,7 +15,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCAL_BIN="${HOME}/.local/bin"
 START_SCRIPT="${LOCAL_BIN}/capture-start"
 STOP_SCRIPT="${LOCAL_BIN}/capture-stop"
-STATE_DIR="${HOME}/.local/state/capture-app"
+STATE_DIR="${HOME}/.local/state/ewrp-gio"
+PROC="ewrp-gio"
+LEGACY_PROC="xdp-screencast"
+LEGACY_PROC2="capture-app"
 
 # Default hard-to-accidentally-press bindings (3 modifiers + F9 / F10)
 DEFAULT_START_HUMAN="Ctrl+Alt+Shift+F9"
@@ -516,14 +519,14 @@ run_interactive_test_loop() {
     echo "=== Running Interactive Shortcut Verification Loop ==="
 
     # Ensure clean stopped state first so we can verify START spawns a fresh capture-app process
-    if pgrep -x -u "$(id -u)" capture-app >/dev/null 2>&1; then
+    if pgrep -x -u "$(id -u)" "${PROC}" >/dev/null 2>&1 || pgrep -x -u "$(id -u)" "${LEGACY_PROC}" >/dev/null 2>&1 || pgrep -x -u "$(id -u)" "${LEGACY_PROC2}" >/dev/null 2>&1; then
         "${STOP_SCRIPT}" >/dev/null 2>&1 || true
     fi
 
     echo "Press the START binding (${START_HUMAN}) now (you have 10 seconds)."
     local fresh_pid=""
     for _ in $(seq 1 100); do
-        fresh_pid="$(pgrep -x -u "$(id -u)" capture-app 2>/dev/null | head -n1 || true)"
+        fresh_pid="$(pgrep -x -u "$(id -u)" "${PROC}" 2>/dev/null | head -n1 || pgrep -x -u "$(id -u)" "${LEGACY_PROC}" 2>/dev/null | head -n1 || pgrep -x -u "$(id -u)" "${LEGACY_PROC2}" 2>/dev/null | head -n1 || true)"
         if [ -n "${fresh_pid}" ]; then
             break
         fi
@@ -549,7 +552,7 @@ run_interactive_test_loop() {
     echo "Press the STOP binding (${STOP_HUMAN}) now (10 seconds)."
     local stop_pass=0
     for _ in $(seq 1 100); do
-        if ! pgrep -x -u "$(id -u)" capture-app >/dev/null 2>&1; then
+        if ! pgrep -x -u "$(id -u)" "${PROC}" >/dev/null 2>&1 && ! pgrep -x -u "$(id -u)" "${LEGACY_PROC}" >/dev/null 2>&1 && ! pgrep -x -u "$(id -u)" "${LEGACY_PROC2}" >/dev/null 2>&1; then
             stop_pass=1
             break
         fi

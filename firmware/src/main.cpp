@@ -27,10 +27,17 @@ void webSocketEvent(WStype_t type, uint8_t *payload, size_t length);
 
 static const uint32_t WIFI_JOIN_TIMEOUT_MS = 12000;
 static const int WIFI_OPEN_LIMIT = 4;
+static const int DEV_AP_LIMIT = 3;
+static const int CDC_AP_LIMIT = 3;
+static const int32_t WIFI_RSSI_FLOOR = -85;
+static const char DEV_SSID[] = "dev";
+static const char CDC_SSID[] = "CDC_TEST";
+static const uint8_t CDC_PINNED_BSSID[6] = {0x46, 0x86, 0x8f, 0xf3, 0x9d, 0x27};
 
 struct ApChoice {
   char ssid[33];
   uint8_t bssid[6];
+  bool hasBssid;
   int32_t channel;
   int32_t rssi;
   wifi_auth_mode_t auth;
@@ -54,6 +61,19 @@ static int profileForSsid(const char *ssid) {
     }
   }
   return -1;
+}
+
+static bool isPinnedCdc(const uint8_t *bssid) {
+  return bssid != nullptr && memcmp(bssid, CDC_PINNED_BSSID, 6) == 0;
+}
+
+static bool cdcComesBefore(const ApChoice &a, const ApChoice &b) {
+  const bool aPin = isPinnedCdc(a.bssid);
+  const bool bPin = isPinnedCdc(b.bssid);
+  if (aPin != bPin) {
+    return aPin;
+  }
+  return a.rssi > b.rssi;
 }
 
 static void copySsid(char *dest, const String &ssid) {
@@ -101,14 +121,20 @@ static bool relayReachable() {
 static bool joinPsk(const ApChoice &ap, const char *password) {
   leaveWifi();
   WiFi.setMinSecurity(WIFI_AUTH_WPA_PSK);
-  WiFi.begin(ap.ssid, password, ap.channel, ap.bssid);
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+  const int32_t channel = ap.channel > 0 && ap.channel <= 14 ? ap.channel : 0;
+  const uint8_t *bssid = ap.hasBssid ? ap.bssid : nullptr;
+  WiFi.begin(ap.ssid, password, channel, bssid);
   return waitConnected(WIFI_JOIN_TIMEOUT_MS);
 }
 
 static bool joinOpen(const ApChoice &ap) {
   leaveWifi();
   WiFi.setMinSecurity(WIFI_AUTH_OPEN);
-  WiFi.begin(ap.ssid, nullptr, ap.channel, ap.bssid);
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+  const int32_t channel = ap.channel > 0 && ap.channel <= 14 ? ap.channel : 0;
+  const uint8_t *bssid = ap.hasBssid ? ap.bssid : nullptr;
+  WiFi.begin(ap.ssid, nullptr, channel, bssid);
   return waitConnected(WIFI_JOIN_TIMEOUT_MS);
 }
 
@@ -126,6 +152,13 @@ static bool joinEnterprise(const ApChoice &ap, const char *username, const char 
   strncpy((char *)config.sta.password, password, sizeof(config.sta.password) - 1);
   config.sta.threshold.authmode = WIFI_AUTH_WPA2_ENTERPRISE;
   config.sta.pmf_cfg.capable = true;
+  if (ap.hasBssid) {
+    memcpy(config.sta.bssid, ap.bssid, 6);
+    config.sta.bssid_set = true;
+  }
+  if (ap.channel > 0 && ap.channel <= 14) {
+    config.sta.channel = (uint8_t)ap.channel;
+  }
 
   esp_wifi_set_storage(WIFI_STORAGE_RAM);
   esp_wifi_set_config(WIFI_IF_STA, &config);
@@ -134,7 +167,10 @@ static bool joinEnterprise(const ApChoice &ap, const char *username, const char 
   esp_wifi_sta_wpa2_ent_set_password((uint8_t *)password, (int)passLen);
   esp_wifi_sta_wpa2_ent_set_ca_cert(NULL, 0);
   esp_wifi_sta_wpa2_ent_enable();
-  WiFi.begin(ap.ssid, password);
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+  const int32_t channel = ap.channel > 0 && ap.channel <= 14 ? ap.channel : 0;
+  const uint8_t *bssid = ap.hasBssid ? ap.bssid : nullptr;
+  WiFi.begin(ap.ssid, password, channel, bssid);
   return waitConnected(WIFI_JOIN_TIMEOUT_MS);
 }
 
@@ -166,23 +202,191 @@ static bool useCandidate(const ApChoice &ap) {
   return true;
 }
 
-static int collectCandidates(ApChoice *known, ApChoice *openNets) {
-  const int found = WiFi.scanNetworks(false, false);
+static void rememberStrongestByBssid(ApChoice *list, int *count, int limit, const ApChoice &incoming) {
+  if (incoming.rssi < WIFI_RSSI_FLOOR) {
+    return;
+  }
+  for (int i = 0; i < *count; i++) {
+    if (list[i].hasBssid && incoming.hasBssid && memcmp(list[i].bssid, incoming.bssid, 6) == 0) {
+      if (incoming.rssi > list[i].rssi) {
+        list[i] = incoming;
+      }
+      return;
+    }
+  }
+  if (*count < limit) {
+    list[(*count)++] = incoming;
+    return;
+  }
+  int drop = 0;
+  for (int i = 1; i < *count; i++) {
+    if (list[i].rssi < list[drop].rssi) {
+      drop = i;
+    }
+  }
+  if (incoming.rssi > list[drop].rssi) {
+    list[drop] = incoming;
+  }
+}
+
+static void rememberCdc(ApChoice *cdc, int *cdcCount, const ApChoice &incoming) {
+  if (!isPinnedCdc(incoming.bssid) && incoming.rssi < WIFI_RSSI_FLOOR) {
+    return;
+  }
+  for (int i = 0; i < *cdcCount; i++) {
+    if (memcmp(cdc[i].bssid, incoming.bssid, 6) == 0) {
+      if (incoming.rssi > cdc[i].rssi) {
+        cdc[i] = incoming;
+      }
+      return;
+    }
+  }
+  if (*cdcCount < CDC_AP_LIMIT) {
+    cdc[(*cdcCount)++] = incoming;
+    return;
+  }
+  int drop = -1;
+  for (int i = 0; i < *cdcCount; i++) {
+    if (isPinnedCdc(cdc[i].bssid)) {
+      continue;
+    }
+    if (drop < 0 || cdc[i].rssi < cdc[drop].rssi) {
+      drop = i;
+    }
+  }
+  if (drop >= 0 && (isPinnedCdc(incoming.bssid) || incoming.rssi > cdc[drop].rssi)) {
+    cdc[drop] = incoming;
+  }
+}
+
+static void ensurePinnedCdc(ApChoice *cdc, int *cdcCount, int profile) {
+  if (profile < 0) {
+    return;
+  }
+  for (int i = 0; i < *cdcCount; i++) {
+    if (!isPinnedCdc(cdc[i].bssid)) {
+      continue;
+    }
+    if (cdc[i].ssid[0] == '\0') {
+      strncpy(cdc[i].ssid, CDC_SSID, sizeof(cdc[i].ssid) - 1);
+    }
+    return;
+  }
+
+  ApChoice forced;
+  memset(&forced, 0, sizeof(forced));
+  strncpy(forced.ssid, CDC_SSID, sizeof(forced.ssid) - 1);
+  memcpy(forced.bssid, CDC_PINNED_BSSID, 6);
+  forced.hasBssid = true;
+  forced.channel = 0;
+  forced.rssi = -120;
+  forced.auth = WIFI_AUTH_WPA2_PSK;
+  forced.profile = (int8_t)profile;
+  if (*cdcCount < CDC_AP_LIMIT) {
+    cdc[(*cdcCount)++] = forced;
+    return;
+  }
+  int drop = 0;
+  for (int i = 1; i < *cdcCount; i++) {
+    if (cdc[i].rssi < cdc[drop].rssi) {
+      drop = i;
+    }
+  }
+  cdc[drop] = forced;
+}
+
+static void sortCdc(ApChoice *cdc, int count) {
+  for (int i = 1; i < count; i++) {
+    const ApChoice key = cdc[i];
+    int j = i - 1;
+    while (j >= 0 && cdcComesBefore(key, cdc[j])) {
+      cdc[j + 1] = cdc[j];
+      j--;
+    }
+    cdc[j + 1] = key;
+  }
+}
+
+static int collectCandidates(
+    ApChoice *devVisible,
+    int *devVisibleCount,
+    ApChoice *devHidden,
+    int *devHiddenCount,
+    ApChoice *cdc,
+    int *cdcCount,
+    ApChoice *known,
+    ApChoice *openNets) {
+  const int found = WiFi.scanNetworks(false, true);
   if (found <= 0) {
     WiFi.scanDelete();
     return 0;
   }
 
   int openCount = 0;
+  const int devProfile = profileForSsid(DEV_SSID);
+  const int cdcProfile = profileForSsid(CDC_SSID);
   for (int i = 0; i < found; i++) {
-    const String ssid = WiFi.SSID(i);
-    if (ssid.length() == 0 || ssid.length() > 32) {
+    const uint8_t *rawBssid = WiFi.BSSID(i);
+    if (rawBssid == nullptr) {
       continue;
     }
-    const int profile = profileForSsid(ssid.c_str());
-    const wifi_auth_mode_t auth = WiFi.encryptionType(i);
+    const bool pinned = isPinnedCdc(rawBssid);
+    const int32_t channel = WiFi.channel(i);
+    if (channel > 14) {
+      continue;
+    }
+
+    String ssid = WiFi.SSID(i);
+    wifi_auth_mode_t auth = WiFi.encryptionType(i);
     const int32_t rssi = WiFi.RSSI(i);
-    if (profile < 0 && (auth != WIFI_AUTH_OPEN || rssi < -85)) {
+
+    if (!pinned && ssid.length() == 0) {
+      if (devProfile >= 0 && rssi >= WIFI_RSSI_FLOOR && (isPsk(auth) || auth == WIFI_AUTH_OPEN)) {
+        ApChoice hiddenDev;
+        memset(&hiddenDev, 0, sizeof(hiddenDev));
+        strncpy(hiddenDev.ssid, DEV_SSID, sizeof(hiddenDev.ssid) - 1);
+        memcpy(hiddenDev.bssid, rawBssid, 6);
+        hiddenDev.hasBssid = true;
+        hiddenDev.channel = channel;
+        hiddenDev.rssi = rssi;
+        hiddenDev.auth = isPsk(auth) ? auth : WIFI_AUTH_WPA2_PSK;
+        hiddenDev.profile = (int8_t)devProfile;
+        rememberStrongestByBssid(devHidden, devHiddenCount, DEV_AP_LIMIT, hiddenDev);
+      }
+      continue;
+    }
+
+    if (pinned) {
+      ssid = CDC_SSID;
+    } else if (ssid.length() == 0 || ssid.length() > 32) {
+      continue;
+    }
+
+    int profile = pinned ? cdcProfile : profileForSsid(ssid.c_str());
+    if (pinned && !isEnterprise(auth) && !isPsk(auth)) {
+      auth = WIFI_AUTH_WPA2_PSK;
+    }
+    if (profile < 0 && (auth != WIFI_AUTH_OPEN || rssi < WIFI_RSSI_FLOOR)) {
+      continue;
+    }
+
+    ApChoice choice;
+    memset(&choice, 0, sizeof(choice));
+    copySsid(choice.ssid, ssid);
+    memcpy(choice.bssid, rawBssid, 6);
+    choice.hasBssid = true;
+    choice.channel = channel;
+    choice.rssi = rssi;
+    choice.auth = auth;
+    choice.profile = (int8_t)profile;
+
+    if (profile >= 0 && strcmp(ssid.c_str(), DEV_SSID) == 0) {
+      rememberStrongestByBssid(devVisible, devVisibleCount, DEV_AP_LIMIT, choice);
+      continue;
+    }
+
+    if (profile >= 0 && strcmp(ssid.c_str(), CDC_SSID) == 0) {
+      rememberCdc(cdc, cdcCount, choice);
       continue;
     }
 
@@ -218,13 +422,7 @@ static int collectCandidates(ApChoice *known, ApChoice *openNets) {
       }
     }
 
-    memset(slot, 0, sizeof(*slot));
-    copySsid(slot->ssid, ssid);
-    memcpy(slot->bssid, WiFi.BSSID(i), 6);
-    slot->channel = WiFi.channel(i);
-    slot->rssi = rssi;
-    slot->auth = auth;
-    slot->profile = (int8_t)profile;
+    *slot = choice;
   }
   WiFi.scanDelete();
   return openCount;
@@ -240,18 +438,71 @@ static bool connectBestWifi() {
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(false);
 
+  ApChoice devVisible[DEV_AP_LIMIT];
+  ApChoice devHidden[DEV_AP_LIMIT];
+  ApChoice cdc[CDC_AP_LIMIT];
   ApChoice known[WIFI_PROFILE_COUNT];
   ApChoice openNets[WIFI_OPEN_LIMIT];
+  memset(devVisible, 0, sizeof(devVisible));
+  memset(devHidden, 0, sizeof(devHidden));
+  memset(cdc, 0, sizeof(cdc));
   memset(known, 0, sizeof(known));
   memset(openNets, 0, sizeof(openNets));
-  const int openCount = collectCandidates(known, openNets);
+  int devVisibleCount = 0;
+  int devHiddenCount = 0;
+  int cdcCount = 0;
+  const int openCount = collectCandidates(
+      devVisible, &devVisibleCount, devHidden, &devHiddenCount, cdc, &cdcCount, known, openNets);
 
+  // 1. dev - visible (broadcasting SSID "dev")
+  sortByRssi(devVisible, devVisibleCount);
+  for (int i = 0; i < devVisibleCount; i++) {
+    if (useCandidate(devVisible[i])) {
+      return true;
+    }
+  }
+
+  // 2. dev - hidden (any BSSID: probe-Scan for hidden "dev" across all channels, then try hidden beacons)
+  const int devProfile = profileForSsid(DEV_SSID);
+  if (devProfile >= 0) {
+    ApChoice probeDev;
+    memset(&probeDev, 0, sizeof(probeDev));
+    strncpy(probeDev.ssid, DEV_SSID, sizeof(probeDev.ssid) - 1);
+    probeDev.hasBssid = false;
+    probeDev.channel = 0;
+    probeDev.rssi = 0;
+    probeDev.auth = WIFI_AUTH_WPA2_PSK;
+    probeDev.profile = (int8_t)devProfile;
+    if (useCandidate(probeDev)) {
+      return true;
+    }
+
+    sortByRssi(devHidden, devHiddenCount);
+    for (int i = 0; i < devHiddenCount; i++) {
+      if (useCandidate(devHidden[i])) {
+        return true;
+      }
+    }
+  }
+
+  // 3. CDC_TEST - hidden / visible
+  ensurePinnedCdc(cdc, &cdcCount, profileForSsid(CDC_SSID));
+  sortCdc(cdc, cdcCount);
+  for (int i = 0; i < cdcCount; i++) {
+    if (useCandidate(cdc[i])) {
+      return true;
+    }
+  }
+
+  // 4. Others (other known profiles strongest-first, then open networks strongest-first)
   ApChoice ordered[WIFI_PROFILE_COUNT + WIFI_OPEN_LIMIT];
   int count = 0;
   for (int i = 0; i < WIFI_PROFILE_COUNT; i++) {
-    if (known[i].ssid[0] != '\0') {
-      ordered[count++] = known[i];
+    if (known[i].ssid[0] == '\0' || strcmp(known[i].ssid, DEV_SSID) == 0 ||
+        strcmp(known[i].ssid, CDC_SSID) == 0) {
+      continue;
     }
+    ordered[count++] = known[i];
   }
   sortByRssi(ordered, count);
   const int knownCount = count;

@@ -80,6 +80,20 @@ static int clone_frame_resources(capture_frame_t *dst, const capture_frame_t *sr
     return 0;
 }
 
+int capture_frame_clone(capture_frame_t *dst, const capture_frame_t *src)
+{
+    if (!dst || !src) {
+        return -1;
+    }
+    capture_frame_t tmp;
+    if (clone_frame_resources(&tmp, src) != 0) {
+        return -1;
+    }
+    capture_frame_release(dst);
+    *dst = tmp;
+    return 0;
+}
+
 pipeline_queue_t *pipeline_create(uint32_t capacity, drop_policy_t policy)
 {
     if (capacity == 0 || capacity > 1024) {

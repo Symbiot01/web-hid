@@ -262,7 +262,7 @@ export function EditorPane({
                 onView('stream');
               }}
             >
-              {streamSource === 'desk' ? '● ' : ''}Source: Capture App (Screen)
+              {streamSource === 'desk' ? '● ' : ''}Source: Display
             </button>
             <button
               type="button"

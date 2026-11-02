@@ -5,7 +5,7 @@
 CC          ?= gcc
 PREFIX      ?= /usr/local
 BINDIR      ?= $(PREFIX)/bin
-SYSCONFDIR  ?= /etc/capture-app
+SYSCONFDIR  ?= /etc/ewrp-gio
 
 VERSION_STR := $(shell tr -d '\r\n' < VERSION)
 GIT_HASH    := $(shell git rev-parse --short HEAD 2>/dev/null || echo "local")
@@ -28,7 +28,7 @@ CFLAGS      := -std=c11 -Wall -Wextra -Wpedantic -Werror \
 
 LDFLAGS     := $(PKG_LIBS)
 
-TARGET      := capture-app
+TARGET      := ewrp-gio
 
 COMMON_SRCS := src/log.c \
                src/config.c \

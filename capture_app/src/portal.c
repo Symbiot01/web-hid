@@ -79,7 +79,7 @@ static void save_restore_token(const char *path, const char *token)
     fchmod(fileno(fp), 0600);
     fprintf(fp, "%s\n", token);
     fclose(fp);
-    LOG_INFO("portal", "saved screencast restore_token to '%s'", path);
+    LOG_INFO("portal", "saved session restore_token to '%s'", path);
 }
 
 static void on_session_closed_signal(XdpSession *session, gpointer user_data)
@@ -88,7 +88,7 @@ static void on_session_closed_signal(XdpSession *session, gpointer user_data)
     portal_ctx_t *ctx = (portal_ctx_t *)user_data;
     if (ctx) {
         atomic_store_explicit(&ctx->session_closed_by_host, true, memory_order_relaxed);
-        LOG_WARN("portal", "screencast session closed by desktop portal / compositor");
+        LOG_WARN("portal", "session closed by desktop portal / compositor");
     }
 }
 
@@ -114,7 +114,7 @@ static void on_session_started(GObject *source, GAsyncResult *result, gpointer u
             }
             g_error_free(error);
         } else {
-            LOG_ERROR("portal", "user denied portal screencast consent prompt");
+            LOG_ERROR("portal", "user denied portal consent prompt");
             ctx->last_status = PORTAL_ERR_USER_DENIED;
         }
         g_main_loop_quit(ctx->loop);

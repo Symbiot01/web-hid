@@ -281,8 +281,8 @@ static int attempt_single_connect(whip_publisher_t *pub)
     tr_init.ssrc        = WHIP_H264_SSRC;
     tr_init.mid         = "video";
     tr_init.name        = "screen";
-    tr_init.msid        = "capture-app-stream";
-    tr_init.trackId     = "capture-app-video0";
+    tr_init.msid        = "ewrp-gio";
+    tr_init.trackId     = "video0";
     tr_init.profile     = "profile-level-id=4d4029;packetization-mode=1;level-asymmetry-allowed=1";
 
     int tr = rtcAddTrackEx(pc, &tr_init);
@@ -300,7 +300,7 @@ static int attempt_single_connect(whip_publisher_t *pub)
     rtcPacketizerInit pkt_init;
     memset(&pkt_init, 0, sizeof(pkt_init));
     pkt_init.ssrc            = WHIP_H264_SSRC;
-    pkt_init.cname           = "capture-app";
+    pkt_init.cname           = "ewrp-gio";
     pkt_init.payloadType     = WHIP_H264_PAYLOAD_TYPE;
     pkt_init.clockRate       = WHIP_H264_CLOCK_RATE;
     pkt_init.maxFragmentSize = 1200;

@@ -19,7 +19,7 @@ static void test_defaults(void)
     assert(cfg.bitrate_kbps == 3000);
     assert(cfg.keyframe_interval_sec == 2);
     assert(strcmp(cfg.monitor, "primary") == 0);
-    assert(strcmp(cfg.whip_url, "https://mediarelay.sahilpatel.online/cam/whip") == 0);
+    assert(strcmp(cfg.whip_url, "https://mediarelay.sahilpatel.online/desk/whip") == 0);
     assert(cfg.reconnect_initial_delay_ms == 500);
     assert(cfg.reconnect_max_delay_ms == 30000);
     assert(cfg.reconnect_max_attempts == 0);
@@ -59,7 +59,7 @@ static void test_ini_parse_and_cli_override(void)
 
     char err[256] = {0};
     char argv_buf[7][64];
-    snprintf(argv_buf[0], sizeof(argv_buf[0]), "capture-app");
+    snprintf(argv_buf[0], sizeof(argv_buf[0]), "ewrp-gio");
     snprintf(argv_buf[1], sizeof(argv_buf[1]), "--config");
     snprintf(argv_buf[2], sizeof(argv_buf[2]), "%s", tmp_path);
     snprintf(argv_buf[3], sizeof(argv_buf[3]), "--fps");

@@ -1,0 +1,7 @@
+{
+  "name": "EWRP WiFi",
+  "description": "Top-bar WiFi picker: visible, open, and hidden networks (NetworkManager)",
+  "uuid": "ewrp-wifi@local",
+  "shell-version": ["45", "46", "47", "48"],
+  "version": 1
+}

@@ -53,6 +53,7 @@ int  pipeline_push(pipeline_queue_t *q, const capture_frame_t *in_frame);
  */
 int  pipeline_pop(pipeline_queue_t *q, capture_frame_t *out_frame, int timeout_ms);
 
+int  capture_frame_clone(capture_frame_t *dst, const capture_frame_t *src);
 void capture_frame_release(capture_frame_t *frame);
 
 void pipeline_inc_encoded(pipeline_queue_t *q);

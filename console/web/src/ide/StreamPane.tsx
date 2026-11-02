@@ -153,7 +153,7 @@ export function StreamPane({
     }
 
     const video = videoRef.current;
-    const mediaStream = new MediaStream();
+    let mediaStream = new MediaStream();
     let session: WhepSession | null = null;
     let timer = 0;
     let stopped = false;
@@ -161,6 +161,7 @@ export function StreamPane({
 
     const schedule = () => {
       if (stopped) return;
+      window.clearTimeout(timer);
       const delay = RETRY_MS[Math.min(retry, RETRY_MS.length - 1)];
       retry += 1;
       timer = window.setTimeout(() => {
@@ -171,15 +172,29 @@ export function StreamPane({
     const connect = async () => {
       if (stopped) return;
       setStatus('connecting');
-      setDetail(sourceRef.current === 'desk' ? 'Connecting to Capture App…' : 'Connecting to Camera…');
+      setDetail(sourceRef.current === 'desk' ? 'Connecting to Display…' : 'Connecting to Camera…');
       try {
         const next = await startWhep((event) => {
-          if (stopped || mediaStream.getTracks().some((track) => track.id === event.track.id)) return;
-          mediaStream.addTrack(event.track);
-          if (video && video.srcObject !== mediaStream) {
+          if (stopped) return;
+          for (const oldTrack of mediaStream.getTracks()) {
+            if (oldTrack.id !== event.track.id) {
+              mediaStream.removeTrack(oldTrack);
+              oldTrack.stop();
+            }
+          }
+          mediaStream = new MediaStream([event.track]);
+          if (video) {
             video.srcObject = mediaStream;
             void video.play().catch(() => undefined);
           }
+          event.track.addEventListener('ended', () => {
+            if (stopped || session !== next) return;
+            setStatus('offline');
+            setDetail('Reconnecting stream…');
+            void next.stop();
+            session = null;
+            schedule();
+          });
         }, sourceRef.current);
         if (stopped) {
           await next.stop();
@@ -194,7 +209,7 @@ export function StreamPane({
             setStatus('live');
             setDetail(
               sourceRef.current === 'desk'
-                ? 'Live · Capture App (Screen)'
+                ? 'Live · Display'
                 : `Live · Camera (Stream ${streamRef.current})`,
             );
             return;
@@ -212,7 +227,7 @@ export function StreamPane({
             }, 2000);
             return;
           }
-          if (state !== 'failed') return;
+          if (state !== 'failed' && state !== 'closed') return;
           setStatus('offline');
           setDetail('No signal');
           next.pc.removeEventListener('connectionstatechange', onState);
@@ -358,7 +373,7 @@ export function StreamPane({
               userSelectedSourceRef.current = true;
               onSource('cam');
             }}
-            title="Switch to LookCam Camera (pauses Capture App stream to save Wi-Fi bandwidth)"
+            title="Switch to LookCam Camera (pauses Display stream to save Wi-Fi bandwidth)"
           >
             Camera ({availability.camOnline ? 'Available' : 'Offline'})
           </button>
@@ -369,9 +384,9 @@ export function StreamPane({
               userSelectedSourceRef.current = true;
               onSource('desk');
             }}
-            title="Switch to Capture App Screen Stream (pauses Camera stream to save Wi-Fi bandwidth)"
+            title="Switch to Display stream (pauses Camera to save Wi-Fi bandwidth)"
           >
-            Capture App ({availability.deskOnline ? 'Available' : 'Offline'})
+            Display ({availability.deskOnline ? 'Available' : 'Offline'})
           </button>
         </div>
         {liveMode ? (

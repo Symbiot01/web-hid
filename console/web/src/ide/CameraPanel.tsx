@@ -223,7 +223,7 @@ export function CameraPanel({
             Video Source (Single Active Stream — Preserves Wi-Fi Bandwidth)
           </strong>
           <span className="ide-hid-stat">
-            Active: {streamStopped ? 'Stopped (0 kbps)' : streamSource === 'desk' ? 'Capture App (Screen)' : 'Camera (LookCam)'}
+            Active: {streamStopped ? 'Stopped (0 kbps)' : streamSource === 'desk' ? 'Display' : 'Camera (LookCam)'}
           </span>
         </div>
         <div className="ide-hid-pills" style={{ marginBottom: '0.5rem' }}>
@@ -231,7 +231,7 @@ export function CameraPanel({
             Camera Bridge: {bridgeOnline ? (cameraOn || ingestOn ? 'streaming' : 'available (standby)') : 'offline'}
           </span>
           <span className={`ide-hid-pill${captureOnline ? ' ok' : ''}`}>
-            Capture App: {captureOnline ? (captureStreaming ? 'streaming' : 'available (standby)') : 'offline'}
+            Display: {captureOnline ? (captureStreaming ? 'streaming' : 'available (standby)') : 'offline'}
           </span>
         </div>
         <div className="ide-cam-actions" style={{ marginBottom: 0 }}>
@@ -242,7 +242,7 @@ export function CameraPanel({
               onStreamSource('cam');
               onOpenStream();
             }}
-            title="Connect to LookCam Camera and suspend Capture App stream"
+            title="Connect to LookCam Camera and suspend desktop stream"
           >
             Connect Camera ({bridgeOnline ? 'Available' : 'Offline'})
           </button>
@@ -253,9 +253,9 @@ export function CameraPanel({
               onStreamSource('desk');
               onOpenStream();
             }}
-            title="Connect to Capture App (Screen) and suspend Camera stream"
+            title="Connect Display stream and suspend Camera"
           >
-            Connect Capture App ({captureOnline ? 'Available' : 'Offline'})
+            Connect Display ({captureOnline ? 'Available' : 'Offline'})
           </button>
           <button
             type="button"
@@ -276,14 +276,14 @@ export function CameraPanel({
 
       <section className="ide-cam-card" aria-label="Snap Frame and Snap Agent">
         <div className="ide-hid-head">
-          <strong className="ide-cam-card-title">Capture & Send Directly to Agent</strong>
-          <label className="ide-check" title="Reset Agent problem before attaching the next capture">
+          <strong className="ide-cam-card-title">Snap & Send to Agent</strong>
+          <label className="ide-check" title="Reset Agent problem before attaching the next frame">
             <input
               type="checkbox"
               checked={resetOnCapture}
               onChange={(event) => setResetOnCapture(event.target.checked)}
             />
-            Start new problem on capture
+            Start new problem on snap
           </label>
         </div>
         <div className="ide-cam-actions" style={{ marginBottom: 0 }}>
@@ -301,7 +301,7 @@ export function CameraPanel({
             className="btn primary ide-mini"
             disabled={capturing !== null}
             onClick={() => void runSnap('agent', 'agent')}
-            title="Trigger remote Capture Agent still photo and attach directly to Agent pane"
+            title="Attach a still frame to the Agent pane"
           >
             {capturing === 'agent-agent' ? 'Snapping Agent…' : '+ Snap Agent → Agent'}
           </button>
@@ -319,7 +319,7 @@ export function CameraPanel({
             className="btn ghost ide-mini"
             disabled={capturing !== null}
             onClick={() => void runSnap('agent', 'save')}
-            title="Download remote Capture Agent photo to disk"
+            title="Download still frame to disk"
           >
             {capturing === 'agent-save' ? 'Saving…' : 'Snap Agent (Save Local)'}
           </button>

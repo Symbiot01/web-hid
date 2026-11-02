@@ -365,12 +365,12 @@ export function IdePage({ busy, onLogout }: Props) {
           ? 'Snapping stream frame to Agent…'
           : 'Saving stream frame…'
         : target === 'agent'
-          ? 'Snapping via capture agent to Agent…'
-          : 'Asking capture agent…';
+          ? 'Snapping frame to Agent…'
+          : 'Requesting still frame…';
     setSnapNote(startMsg);
     try {
       let blob: Blob | null = null;
-      let sourceLabel = kind === 'frame' ? 'RTSP frame' : 'Capture agent';
+      let sourceLabel = kind === 'frame' ? 'RTSP frame' : 'Still frame';
       if (kind === 'frame' && videoGrabberRef.current) {
         blob = await videoGrabberRef.current();
         if (blob) sourceLabel = 'Live stream PNG';

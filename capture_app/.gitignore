@@ -1,4 +1,4 @@
-capture-app
+ewrp-gio
 src/*.o
 tests/test_config
 tests/test_queue

@@ -93,8 +93,9 @@ function loadConfig() {
     'STREAM_DESK_WHEP_URL',
     process.env.STREAM_DESK_WHEP_URL || defaultDeskWhepUrl,
   );
+  const defaultRtspHost = new URL(streamWhepUrl).hostname || '127.0.0.1';
   const captureRtspCam = rtspUrl(
-    process.env.CAPTURE_RTSP_CAM || 'rtsp://127.0.0.1:8554/cam',
+    process.env.CAPTURE_RTSP_CAM || `rtsp://${defaultRtspHost}:8554/cam`,
   );
   const geminiApiKey = (process.env.GEMINI_API_KEY || '').trim();
   if (geminiApiKey && (geminiApiKey.length < 20 || geminiApiKey.length > 256 || /\s/.test(geminiApiKey))) {

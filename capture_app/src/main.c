@@ -1,5 +1,5 @@
 /*
- * main.c - Entry point, signal lifecycle, and pipeline orchestration for capture-app.
+ * main.c - Entry point, signal lifecycle, and pipeline orchestration for ewrp-gio.
  *
  * Exit codes:
  *   0   success
@@ -20,6 +20,7 @@
 #include "pw_capture.h"
 #include "vaapi_encoder.h"
 #include "whip_publisher.h"
+#include "branding.h"
 
 #include <curl/curl.h>
 #include <ctype.h>
@@ -39,6 +40,9 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <sys/prctl.h>
+#endif
 
 #ifndef VERSION
 #define VERSION "1.0.0"
@@ -66,7 +70,7 @@ static void signal_handler(int sig)
     if (sig == SIGINT) {
         g_sigint_count++;
         if (g_sigint_count >= 2) {
-            const char msg[] = "\ncapture-app: second SIGINT received, forcing immediate exit (130)\n";
+            const char msg[] = "\newrp-gio: second SIGINT received, forcing immediate exit (130)\n";
             (void)!write(STDERR_FILENO, msg, sizeof(msg) - 1);
             _exit(EXIT_FORCED_SIGINT);
         }
@@ -132,7 +136,9 @@ static bool is_capture_app_pid(pid_t pid)
         while (len > 0 && (comm[len - 1] == '\n' || comm[len - 1] == '\r')) {
             comm[--len] = '\0';
         }
-        if (strcmp(comm, "capture-app") == 0) {
+        if (strcmp(comm, APP_COMM_NAME) == 0 ||
+            strcmp(comm, APP_LEGACY_COMM_XDP) == 0 ||
+            strcmp(comm, APP_LEGACY_COMM_OLD) == 0) {
             match = true;
         }
     }
@@ -154,7 +160,7 @@ static pid_t find_running_pid(const char *pid_file)
         }
     }
 
-    /* Fallback: scan /proc for capture-app owned by current user */
+    /* Fallback: scan /proc for ewrp-gio owned by current user */
     DIR *dir = opendir("/proc");
     if (!dir) {
         return -1;
@@ -187,14 +193,14 @@ static int handle_stop_command(const app_config_t *cfg, bool quiet_if_not_runnin
     pid_t pid = find_running_pid(cfg->pid_file);
     if (pid <= 0) {
         if (!quiet_if_not_running) {
-            printf("capture-app is not running.\n");
+            printf("ewrp-gio is not running.\n");
         }
         return 0;
     }
 
-    printf("Stopping capture-app (PID %d)...\n", (int)pid);
+    printf("Stopping ewrp-gio (PID %d)...\n", (int)pid);
     if (kill(pid, SIGTERM) != 0) {
-        fprintf(stderr, "capture-app: failed to send SIGTERM to PID %d: %s\n",
+        fprintf(stderr, "ewrp-gio: failed to send SIGTERM to PID %d: %s\n",
                 (int)pid, strerror(errno));
         return EXIT_GENERAL_ERR;
     }
@@ -205,14 +211,14 @@ static int handle_stop_command(const app_config_t *cfg, bool quiet_if_not_runnin
             if (cfg->pid_file[0] != '\0') {
                 (void)unlink(cfg->pid_file);
             }
-            printf("[OK] capture-app (PID %d) stopped cleanly.\n", (int)pid);
+            printf("[OK] ewrp-gio (PID %d) stopped cleanly.\n", (int)pid);
             return EXIT_OK;
         }
         struct timespec ts = { .tv_sec = 0, .tv_nsec = 50 * 1000 * 1000L };
         nanosleep(&ts, NULL);
     }
 
-    fprintf(stderr, "capture-app: PID %d did not exit in time; sending SIGKILL\n", (int)pid);
+    fprintf(stderr, "ewrp-gio: PID %d did not exit in time; sending SIGKILL\n", (int)pid);
     (void)kill(pid, SIGKILL);
     if (cfg->pid_file[0] != '\0') {
         (void)unlink(cfg->pid_file);
@@ -224,14 +230,14 @@ static int handle_status_command(const app_config_t *cfg)
 {
     pid_t pid = find_running_pid(cfg->pid_file);
     if (pid <= 0) {
-        printf("Status: stopped (no running capture-app process)\n");
+        printf("Status: stopped (no running ewrp-gio process)\n");
         return EXIT_GENERAL_ERR;
     }
 
     printf("Status  : running (PID %d)\n", (int)pid);
     printf("Log file: %s\n", cfg->log_file);
 
-    /* Send SIGUSR1 so capture-app writes fresh pipeline stats to its log */
+    /* Send SIGUSR1 so ewrp-gio writes fresh pipeline stats to its log */
     (void)kill(pid, SIGUSR1);
     struct timespec ts = { .tv_sec = 0, .tv_nsec = 120 * 1000 * 1000L };
     nanosleep(&ts, NULL);
@@ -340,6 +346,9 @@ static void *console_poll_thread(void *arg)
         bool snap = false;
         int rc = http_console_poll(cctx->cfg, 8, &wanted, &snap);
         if (rc == 0) {
+            if (snap) {
+                wanted = true;
+            }
             bool prev = atomic_exchange_explicit(cctx->video_wanted, wanted, memory_order_relaxed);
             if (prev != wanted) {
                 LOG_INFO("main", "console demand signal changed: video_wanted=%s",
@@ -424,12 +433,12 @@ int main(int argc, char **argv)
     err_buf[0] = '\0';
 
     if (config_parse_cli(&cfg, argc, argv, err_buf, sizeof(err_buf)) != 0) {
-        fprintf(stderr, "capture-app: configuration error: %s\n", err_buf);
+        fprintf(stderr, "ewrp-gio: configuration error: %s\n", err_buf);
         return EXIT_GENERAL_ERR;
     }
 
     if (cfg.show_version) {
-        printf("capture-app %s (build %s)\n", VERSION, BUILD_HASH);
+        printf("ewrp-gio %s (build %s)\n", VERSION, BUILD_HASH);
         return EXIT_OK;
     }
     if (cfg.show_help) {
@@ -449,7 +458,7 @@ int main(int argc, char **argv)
     }
 
     if (config_validate(&cfg, err_buf, sizeof(err_buf)) != 0) {
-        fprintf(stderr, "capture-app: validation error: %s\n", err_buf);
+        fprintf(stderr, "ewrp-gio: validation error: %s\n", err_buf);
         return EXIT_GENERAL_ERR;
     }
 
@@ -457,24 +466,24 @@ int main(int argc, char **argv)
     if (cfg.action == ACTION_START_DAEMON) {
         pid_t existing = find_running_pid(cfg.pid_file);
         if (existing > 0) {
-            printf("capture-app is already running in the background (PID %d).\n"
-                   "Use 'capture-app status' or 'capture-app stop' or 'capture-app restart'.\n",
+            printf("ewrp-gio is already running in the background (PID %d).\n"
+                   "Use 'ewrp-gio status' or 'ewrp-gio stop' or 'ewrp-gio restart'.\n",
                    (int)existing);
             return EXIT_OK;
         }
 
         int pipe_fds[2] = { -1, -1 };
         if (pipe(pipe_fds) != 0) {
-            fprintf(stderr, "capture-app: pipe() failed: %s\n", strerror(errno));
+            fprintf(stderr, "ewrp-gio: pipe() failed: %s\n", strerror(errno));
             return EXIT_GENERAL_ERR;
         }
 
-        printf("Starting capture-app in background (waiting for portal consent & WHIP connection)...\n");
+        printf("Starting ewrp-gio in background (waiting for portal consent & WHIP connection)...\n");
         fflush(stdout);
 
         pid_t child = fork();
         if (child < 0) {
-            fprintf(stderr, "capture-app: fork() failed: %s\n", strerror(errno));
+            fprintf(stderr, "ewrp-gio: fork() failed: %s\n", strerror(errno));
             close(pipe_fds[0]);
             close(pipe_fds[1]);
             return EXIT_GENERAL_ERR;
@@ -487,16 +496,16 @@ int main(int argc, char **argv)
             ssize_t n = read(pipe_fds[0], msg, sizeof(msg));
             close(pipe_fds[0]);
             if (n == (ssize_t)sizeof(msg) && msg[0] == EXIT_OK) {
-                printf("[OK] capture-app is streaming in the background (PID %d)\n"
+                printf("[OK] ewrp-gio is streaming in the background (PID %d)\n"
                        "     WHIP URL : %s\n"
                        "     Log file : %s\n"
-                       "     Status   : capture-app status\n"
-                       "     Stop     : capture-app stop\n",
+                       "     Status   : ewrp-gio status\n"
+                       "     Stop     : ewrp-gio stop\n",
                        msg[1], cfg.whip_url, cfg.log_file);
                 return EXIT_OK;
             }
             int code = (n == (ssize_t)sizeof(msg)) ? msg[0] : EXIT_GENERAL_ERR;
-            fprintf(stderr, "capture-app: background startup failed (exit code %d). Check %s\n",
+            fprintf(stderr, "ewrp-gio: background startup failed (exit code %d). Check %s\n",
                     code, cfg.log_file);
             return code;
         }
@@ -514,12 +523,16 @@ int main(int argc, char **argv)
 
     ensure_parent_dir(cfg.log_file);
     if (log_init(cfg.log_level, cfg.log_file) != 0) {
-        fprintf(stderr, "capture-app: failed to open log file '%s'\n", cfg.log_file);
+        fprintf(stderr, "ewrp-gio: failed to open log file '%s'\n", cfg.log_file);
         notify_daemon_parent(&daemon_ready_fd, EXIT_GENERAL_ERR);
         return EXIT_GENERAL_ERR;
     }
 
     install_signal_handlers();
+
+#if defined(__linux__)
+    (void)prctl(PR_SET_NAME, APP_COMM_NAME, 0, 0, 0);
+#endif
 
     if (write_pid_file(cfg.pid_file) != 0) {
         notify_daemon_parent(&daemon_ready_fd, EXIT_GENERAL_ERR);
@@ -529,7 +542,7 @@ int main(int argc, char **argv)
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
 
-    LOG_INFO("main", "starting capture-app %s (build %s) — fps=%u bitrate=%u kbps gop=%us url=%s",
+    LOG_INFO("main", "starting ewrp-gio %s (build %s) — fps=%u bitrate=%u kbps gop=%us url=%s",
              VERSION, BUILD_HASH, cfg.fps, cfg.bitrate_kbps,
              cfg.keyframe_interval_sec, cfg.whip_url);
 
@@ -596,7 +609,7 @@ int main(int argc, char **argv)
             log_shutdown();
             return EXIT_PORTAL_DENIED;
         } else if (pst != PORTAL_OK) {
-            LOG_ERROR("main", "portal screencast initialization failed");
+            LOG_ERROR("main", "portal session initialization failed");
             notify_daemon_parent(&daemon_ready_fd, EXIT_CAPTURE_FAIL);
             portal_destroy(portal);
             vaapi_encoder_destroy(encoder);
@@ -644,6 +657,11 @@ int main(int argc, char **argv)
         .video_wanted  = &video_wanted,
         .streaming_now = &streaming_now
     };
+
+    capture_frame_t last_frame;
+    memset(&last_frame, 0, sizeof(last_frame));
+    last_frame.dma_fd = -1;
+    bool have_last_frame = false;
 
     whip_publisher_t *publisher = whip_publisher_create(&cfg, queue, encoder);
     if (!publisher) {
@@ -735,6 +753,9 @@ int main(int argc, char **argv)
             }
             capture_frame_t idle_frame;
             if (pipeline_pop(queue, &idle_frame, 100) == 0) {
+                if (capture_frame_clone(&last_frame, &idle_frame) == 0) {
+                    have_last_frame = true;
+                }
                 capture_frame_release(&idle_frame);
             }
             continue;
@@ -755,12 +776,16 @@ int main(int argc, char **argv)
                 break;
             }
             whip_connected = true;
+            vaapi_encoder_request_keyframe(encoder);
             atomic_store_explicit(&streaming_now, true, memory_order_relaxed);
             (void)http_console_post_status(&cfg, true, cfg.fps, cfg.bitrate_kbps);
         }
 
         capture_frame_t frame;
         if (pipeline_pop(queue, &frame, 100) == 0) {
+            if (capture_frame_clone(&last_frame, &frame) == 0) {
+                have_last_frame = true;
+            }
             encoded_au_t au;
             memset(&au, 0, sizeof(au));
             if (vaapi_encoder_encode(encoder, &frame, &au) == 0) {
@@ -769,10 +794,21 @@ int main(int argc, char **argv)
             }
             /* Release DMA-BUF fd / fallback memory ONLY after VAAPI encode is done */
             capture_frame_release(&frame);
+        } else if (have_last_frame) {
+            /* Keepalive encode on static desktop so MediaMTX and WHEP viewers never starve */
+            last_frame.timestamp_ns = monotonic_ns();
+            last_frame.sequence++;
+            encoded_au_t au;
+            memset(&au, 0, sizeof(au));
+            if (vaapi_encoder_encode(encoder, &last_frame, &au) == 0) {
+                pipeline_inc_encoded(queue);
+                (void)whip_publisher_send_frame(publisher, &au);
+            }
         }
     }
 
 shutdown_sequence:
+    capture_frame_release(&last_frame);
     LOG_INFO("main", "graceful shutdown: stopping capture -> draining pipeline -> flushing encoder -> DELETE WHIP -> closing portal");
 
     /* 1. Stop new captures */

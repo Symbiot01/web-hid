@@ -10,6 +10,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "pw_capture.h"
+#include "branding.h"
 #include "log.h"
 
 #include <drm/drm_fourcc.h>
@@ -320,7 +321,7 @@ int pw_capture_start(pw_capture_ctx_t *ctx, int pw_fd, uint32_t node_id)
         PW_KEY_MEDIA_ROLE,     "Screen",
         NULL);
 
-    ctx->stream = pw_stream_new(ctx->core, "capture-app-screencast", props);
+    ctx->stream = pw_stream_new(ctx->core, APP_COMM_NAME, props);
     if (!ctx->stream) {
         LOG_ERROR("pipewire", "pw_stream_new failed");
         pw_thread_loop_unlock(ctx->thread_loop);

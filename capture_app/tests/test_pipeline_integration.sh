@@ -13,7 +13,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-BIN="${APP_DIR}/capture-app"
+BIN="${APP_DIR}/ewrp-gio"
 
 if [[ ! -x "${BIN}" ]]; then
     echo "ERROR: ${BIN} not built" >&2
@@ -23,7 +23,7 @@ fi
 echo "=== [1/4] Verifying --version and --help ==="
 VER_OUT="$("${BIN}" --version)"
 echo "  ${VER_OUT}"
-if [[ "${VER_OUT}" != *"capture-app 1.0.0 (build "* ]]; then
+if [[ "${VER_OUT}" != *"ewrp-gio 1.0.0 (build "* ]]; then
     echo "FAIL: unexpected --version output" >&2
     exit 1
 fi

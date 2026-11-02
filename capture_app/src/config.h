@@ -55,6 +55,7 @@ typedef struct {
 } app_config_t;
 
 void config_init_defaults(app_config_t *cfg);
+void config_apply_legacy_paths(app_config_t *cfg);
 int  config_load_ini(app_config_t *cfg, const char *path, char *err_buf, size_t err_len);
 int  config_parse_cli(app_config_t *cfg, int argc, char **argv, char *err_buf, size_t err_len);
 int  config_validate(const app_config_t *cfg, char *err_buf, size_t err_len);

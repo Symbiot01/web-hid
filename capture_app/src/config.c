@@ -4,6 +4,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "config.h"
+#include "branding.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -20,13 +21,13 @@ void config_init_defaults(app_config_t *cfg)
         return;
     }
     memset(cfg, 0, sizeof(*cfg));
-    snprintf(cfg->config_path, sizeof(cfg->config_path), "/etc/capture-app/config.ini");
+    snprintf(cfg->config_path, sizeof(cfg->config_path), "%s/config.ini", APP_SYSCONF_DIR);
     cfg->fps                        = 10;
     cfg->bitrate_kbps               = 3000;
     cfg->keyframe_interval_sec      = 2;
     snprintf(cfg->monitor, sizeof(cfg->monitor), "primary");
     snprintf(cfg->whip_url, sizeof(cfg->whip_url),
-             "https://mediarelay.sahilpatel.online/cam/whip");
+             "https://mediarelay.sahilpatel.online/desk/whip");
     cfg->log_level                  = LOG_LEVEL_INFO;
     snprintf(cfg->log_file, sizeof(cfg->log_file), "stderr");
     cfg->duration_sec               = 0;
@@ -41,15 +42,59 @@ void config_init_defaults(app_config_t *cfg)
     const char *home = getenv("HOME");
     if (home && home[0] != '\0') {
         snprintf(cfg->restore_token_file, sizeof(cfg->restore_token_file),
-                 "%.440s/.local/state/capture-app/restore_token", home);
+                 "%.440s/.local/state/%s/restore_token", home, APP_STATE_BASENAME);
         snprintf(cfg->pid_file, sizeof(cfg->pid_file),
-                 "%.440s/.local/state/capture-app/capture-app.pid", home);
+                 "%.440s/.local/state/%s/%s.pid", home, APP_STATE_BASENAME, APP_STATE_BASENAME);
     } else {
         snprintf(cfg->restore_token_file, sizeof(cfg->restore_token_file),
-                 "/tmp/capture-app-restore_token");
+                 "/tmp/%s-restore_token", APP_STATE_BASENAME);
         snprintf(cfg->pid_file, sizeof(cfg->pid_file),
-                 "/tmp/capture-app.pid");
+                 "/tmp/%s.pid", APP_STATE_BASENAME);
     }
+}
+
+static void use_readable_path_if_missing(char *dest, size_t dest_len, const char *candidate)
+{
+    if (!dest || dest_len == 0 || !candidate || candidate[0] == '\0') {
+        return;
+    }
+    if (access(dest, R_OK) == 0) {
+        return;
+    }
+    if (access(candidate, R_OK) == 0) {
+        snprintf(dest, dest_len, "%s", candidate);
+    }
+}
+
+void config_apply_legacy_paths(app_config_t *cfg)
+{
+    if (!cfg) {
+        return;
+    }
+    const char *home = getenv("HOME");
+    if (!home || home[0] == '\0') {
+        return;
+    }
+
+    char candidate[512];
+    const char *state_dirs[] = { APP_LEGACY_STATE_XDP, APP_LEGACY_STATE_OLD, NULL };
+    for (size_t i = 0; state_dirs[i]; ++i) {
+        snprintf(candidate, sizeof(candidate),
+                 "%.440s/.local/state/%s/restore_token", home, state_dirs[i]);
+        use_readable_path_if_missing(cfg->restore_token_file, sizeof(cfg->restore_token_file), candidate);
+    }
+
+    snprintf(candidate, sizeof(candidate),
+             "%.440s/.local/state/%s/%s.pid", home, APP_LEGACY_STATE_XDP, APP_LEGACY_COMM_XDP);
+    use_readable_path_if_missing(cfg->pid_file, sizeof(cfg->pid_file), candidate);
+    snprintf(candidate, sizeof(candidate),
+             "%.440s/.local/state/%s/capture-app.pid", home, APP_LEGACY_STATE_OLD);
+    use_readable_path_if_missing(cfg->pid_file, sizeof(cfg->pid_file), candidate);
+
+    snprintf(candidate, sizeof(candidate), "%s/config.ini", APP_LEGACY_SYSCONF_XDP);
+    use_readable_path_if_missing(cfg->config_path, sizeof(cfg->config_path), candidate);
+    snprintf(candidate, sizeof(candidate), "%s/config.ini", APP_LEGACY_SYSCONF_OLD);
+    use_readable_path_if_missing(cfg->config_path, sizeof(cfg->config_path), candidate);
 }
 
 const char *drop_policy_to_string(drop_policy_t policy)
@@ -305,6 +350,8 @@ enum {
 
 int config_parse_cli(app_config_t *cfg, int argc, char **argv, char *err_buf, size_t err_len)
 {
+    config_apply_legacy_paths(cfg);
+
     static const struct option long_opts[] = {
         {"config",                 required_argument, NULL, OPT_CONFIG},
         {"fps",                    required_argument, NULL, OPT_FPS},
@@ -387,7 +434,13 @@ int config_parse_cli(app_config_t *cfg, int argc, char **argv, char *err_buf, si
         const char *home = getenv("HOME");
         if (home && home[0] != '\0') {
             char user_cfg[512];
-            snprintf(user_cfg, sizeof(user_cfg), "%.440s/.config/capture-app/config.ini", home);
+            snprintf(user_cfg, sizeof(user_cfg), "%.440s/%s/config.ini", home, APP_USER_CONFIG_DIR);
+            if (access(user_cfg, R_OK) != 0) {
+                snprintf(user_cfg, sizeof(user_cfg), "%.440s/%s/config.ini", home, APP_LEGACY_USER_XDP);
+            }
+            if (access(user_cfg, R_OK) != 0) {
+                snprintf(user_cfg, sizeof(user_cfg), "%.440s/%s/config.ini", home, APP_LEGACY_USER_OLD);
+            }
             if (access(user_cfg, R_OK) == 0) {
                 snprintf(cfg->config_path, sizeof(cfg->config_path), "%s", user_cfg);
                 if (config_load_ini(cfg, user_cfg, err_buf, err_len) != 0) {
@@ -494,12 +547,14 @@ int config_parse_cli(app_config_t *cfg, int argc, char **argv, char *err_buf, si
         const char *home = getenv("HOME");
         if (home && home[0] != '\0') {
             snprintf(cfg->log_file, sizeof(cfg->log_file),
-                     "%.440s/.local/state/capture-app/capture-app.log", home);
+                     "%.440s/.local/state/%s/%s.log", home, APP_STATE_BASENAME, APP_STATE_BASENAME);
         } else {
             snprintf(cfg->log_file, sizeof(cfg->log_file),
-                     "/tmp/capture-app.log");
+                     "/tmp/%s.log", APP_STATE_BASENAME);
         }
     }
+
+    config_apply_legacy_paths(cfg);
 
     return 0;
 }
@@ -571,7 +626,7 @@ int config_validate(const app_config_t *cfg, char *err_buf, size_t err_len)
 
 void config_print_help(const char *prog_name)
 {
-    const char *p = prog_name ? prog_name : "capture-app";
+    const char *p = prog_name ? prog_name : APP_CLI_NAME;
     printf("Usage:\n"
            "  %s [OPTIONS]            Run in foreground\n"
            "  %s start [OPTIONS]      Start in background (detached from terminal)\n"
@@ -581,7 +636,7 @@ void config_print_help(const char *prog_name)
            "Wayland/X11 Portal + PipeWire + VA-API H.264 + WHIP Screen Publisher\n\n"
            "Options:\n"
            "  -d, --daemon                   Run detached in the background (same as 'start')\n"
-           "  --config PATH                  Configuration INI path (default: /etc/capture-app/config.ini)\n"
+           "  --config PATH                  Configuration INI path (default: " APP_SYSCONF_DIR "/config.ini)\n"
            "  --fps N                        Target capture & encode frame rate (default: 10)\n"
            "  --bitrate-kbps N               Target H.264 bitrate in kbps (default: 3000)\n"
            "  --keyframe-interval N          Keyframe (IDR) interval in seconds (default: 2)\n"
@@ -596,7 +651,7 @@ void config_print_help(const char *prog_name)
            "  --log-level LEVEL              Log verbosity: DEBUG|INFO|WARN|ERROR (default: INFO)\n"
            "  --log-file PATH                Log output file path or stderr (default: stderr)\n"
            "  --duration N                   Run duration in seconds, 0 = forever (default: 0)\n"
-           "  --pid-file PATH                PID file path (default: ~/.local/state/capture-app/capture-app.pid)\n"
+           "  --pid-file PATH                PID file path (default: ~/.local/state/" APP_STATE_BASENAME "/" APP_STATE_BASENAME ".pid)\n"
            "  --render-node PATH             DRM render node path (default: /dev/dri/renderD128)\n"
            "  --reconnect-max-attempts N     Max WHIP reconnect attempts, 0 = forever (default: 0)\n"
            "  --reconnect-initial-ms N       Initial reconnect delay in ms (default: 500)\n"

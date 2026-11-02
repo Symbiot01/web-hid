@@ -1,0 +1,7 @@
+{
+  "name": "Hide Screen Share Indicator",
+  "description": "Hides GNOME Shell screen cast / recording pills on the top panel",
+  "uuid": "hide-screen-share@local",
+  "shell-version": ["45", "46", "47", "48"],
+  "version": 1
+}
