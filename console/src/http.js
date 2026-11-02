@@ -341,8 +341,9 @@ function createApp(opts) {
   app.post('/api/camera/watch', requireSession(config.sessionSecret), watchLimiter, (req, res) => {
     const problem = camera.watch(req.body);
     if (problem) return res.status(400).json({ error: problem });
-    capture.suspend();
-    stopIngest('desk');
+    // Do not capture.suspend()/stopIngest('desk') here. Alternating cam/desk
+    // watch heartbeats were killing WHIP every few seconds (connecting forever).
+    // Desk demand drops on its own when capture watchers expire (STOP_GRACE).
     return res.status(200).json({ ok: true });
   });
 
@@ -446,8 +447,8 @@ function createApp(opts) {
   app.post('/api/capture/watch', requireSession(config.sessionSecret), watchLimiter, (req, res) => {
     const problem = capture.watch(req.body);
     if (problem) return res.status(400).json({ error: problem });
-    camera.suspend();
-    stopIngest('cam');
+    // Same as /api/camera/watch: no immediate cross-suspend/stopIngest.
+    // Prevents cam/desk heartbeat races from tearing down the publisher.
     return res.status(200).json({ ok: true });
   });
 

@@ -172,7 +172,7 @@ test('switching between camera and capture app enforces single active stream (mu
     assert.equal(status2.capture.video, 'wanted');
     assert.equal(status2.video, 'off');
 
-    // 4. Operator switches to Camera (cam) -> capture video is immediately suspended (false), camera becomes wanted (true)
+    // 4. Camera watch no longer cross-suspends desk (avoids WHIP flap). Both can be wanted.
     const watchCam = await fetch(`${base}/api/camera/watch`, {
       method: 'POST',
       headers,
@@ -181,23 +181,21 @@ test('switching between camera and capture app enforces single active stream (mu
     assert.equal(watchCam.status, 200);
 
     const capPoll3 = await (await fetch(`${base}/api/capture/poll?wait=1`, { headers: captureAuth })).json();
-    assert.equal(capPoll3.video, false);
+    assert.equal(capPoll3.video, true);
 
     const status3 = await (await fetch(`${base}/api/camera`, { headers })).json();
     assert.equal(status3.video, 'wanted');
-    assert.equal(status3.capture.video, 'off');
+    assert.equal(status3.capture.video, 'wanted');
 
-    // 5. Operator switches back to Capture App (desk) -> camera video is immediately suspended (false), capture becomes wanted (true)
-    const watchDeskAgain = await fetch(`${base}/api/capture/watch`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ id: 'viewer-desk-01' }),
-    });
-    assert.equal(watchDeskAgain.status, 200);
+    // 5. Explicit capture stop clears desk demand; camera can remain wanted.
+    const stopDesk = await fetch(`${base}/api/capture/stop`, { method: 'POST', headers });
+    assert.equal(stopDesk.status, 200);
+
+    const capPoll4 = await (await fetch(`${base}/api/capture/poll?wait=1`, { headers: captureAuth })).json();
+    assert.equal(capPoll4.video, false);
 
     const status4 = await (await fetch(`${base}/api/camera`, { headers })).json();
-    assert.equal(status4.video, 'off');
-    assert.equal(status4.capture.video, 'wanted');
+    assert.equal(status4.capture.video, 'off');
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
