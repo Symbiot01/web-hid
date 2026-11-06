@@ -23,7 +23,7 @@ export type TestCase = {
   status: TestStatus;
 };
 
-export type AgentMode = 'ask' | 'agent';
+export type AgentMode = 'ask' | 'mcq' | 'agent';
 
 export type AgentPhase = 'idle' | 'working' | 'needs_human' | 'solved' | 'blocked';
 

@@ -404,7 +404,7 @@ textarea:focus-visible {
 
 .ide-modes .ide-tab {
   border-radius: 5px;
-  padding: 0.2rem 0.6rem;
+  padding: 0.2rem 0.45rem;
   font-size: 0.75rem;
   font-weight: 500;
 }

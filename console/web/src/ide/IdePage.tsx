@@ -634,22 +634,31 @@ export function IdePage({ busy, onLogout }: Props) {
       setMessages((prev) => [...prev, { id: nextId('msg'), role: 'user', text: userLabel, kind: 'user' }]);
     }
     try {
-      if (mode === 'ask') {
+      if (mode === 'ask' || mode === 'mcq') {
         askPending.current = true;
         setAgentPhase('working');
         setAgentStartedAt(Date.now());
-        setAgentActivity(`Analyzing ${active?.name ?? 'main.cpp'} and preparing an answer…`);
+        setAgentActivity(
+          mode === 'mcq' ? 'Reading the choices…' : `Analyzing ${active?.name ?? 'main.cpp'} and preparing an answer…`,
+        );
         try {
-          const response = await fetch('/api/agent/ask', {
+          const response = await fetch(mode === 'mcq' ? '/api/agent/mcq' : '/api/agent/ask', {
             method: 'POST',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              text,
-              source: active?.value ?? '',
-              fileName: active?.name ?? 'main.cpp',
-              problemType: problemTypeForFile(active?.name ?? 'main.cpp'),
-            }),
+            body: JSON.stringify(
+              mode === 'mcq'
+                ? {
+                    text,
+                    images: images.map((item) => ({ mime: item.mime, data: item.base64 })),
+                  }
+                : {
+                    text,
+                    source: active?.value ?? '',
+                    fileName: active?.name ?? 'main.cpp',
+                    problemType: problemTypeForFile(active?.name ?? 'main.cpp'),
+                  },
+            ),
           });
           const payload = (await response.json()) as { text?: string; error?: string };
           setMessages((prev) => [
@@ -711,8 +720,8 @@ export function IdePage({ busy, onLogout }: Props) {
     } catch {
       askPending.current = false;
       const reason = 'The agent is unreachable.';
-      setAgentPhase(mode === 'ask' ? 'idle' : 'needs_human');
-      setAgentActivity(mode === 'ask' ? '' : reason);
+      setAgentPhase(mode === 'ask' || mode === 'mcq' ? 'idle' : 'needs_human');
+      setAgentActivity(mode === 'ask' || mode === 'mcq' ? '' : reason);
       setMessages((prev) => [...prev, { id: nextId('msg'), role: 'assistant', text: reason, kind: 'step' }]);
     } finally {
       awaitingAgent.current = false;

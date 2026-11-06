@@ -666,6 +666,30 @@ function createApp(opts) {
     }
   });
 
+  app.post('/api/agent/mcq', requireSession(config.sessionSecret), agentLimiter, agentJson, async (req, res) => {
+    try {
+      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const image =
+        typeof body.imageBase64 === 'string' && body.imageBase64
+          ? { mime: body.mime, data: body.imageBase64 }
+          : null;
+      const images = Array.isArray(body.images)
+        ? body.images.map((item) => ({
+            mime: item && item.mime,
+            data: item && (item.data || item.base64),
+          }))
+        : undefined;
+      const view = await agent.mcq({
+        text: body.text,
+        image,
+        images,
+      });
+      return res.status(200).json(view);
+    } catch (error) {
+      return agentError(res, error);
+    }
+  });
+
   app.post('/api/agent/check', requireSession(config.sessionSecret), runLimiter, express.json({ limit: '2mb' }), async (req, res) => {
     try {
       const body = req.body && typeof req.body === 'object' ? req.body : {};

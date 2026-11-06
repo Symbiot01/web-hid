@@ -592,6 +592,39 @@ test('ask does not return source', async () => {
   assert.equal(answer.text.includes(KEY), false);
 });
 
+test('mcq returns the option letter and does not reveal the key or source', async () => {
+  const seen = [];
+  const agent = createAgentControl({
+    apiKey: KEY,
+    generate: async (task, ctx) => {
+      seen.push({ task, images: (ctx.images || []).length });
+      if (seen.length === 1) {
+        return {
+          answers: [{ number: 2, choice: 'b.', option: `hash map ${KEY}`, reason: 'One pass over the array.' }],
+          note: '',
+        };
+      }
+      return { answers: [], note: 'This is not a multiple-choice question.' };
+    },
+    run: async () => passRun(),
+  });
+  const first = await agent.mcq({ text: 'Which structure is it?\nA list\nB hash map' });
+  assert.equal(Object.hasOwn(first, 'source'), false);
+  assert.equal(first.text.includes(KEY), false);
+  assert.match(first.text, /2\. B — hash map/);
+  assert.match(first.text, /One pass over the array/);
+  const jpeg = { mime: 'image/jpeg', data: Buffer.from([0xff, 0xd8, 0xff, 1]).toString('base64') };
+  const second = await agent.mcq({ text: '', images: [jpeg] });
+  assert.match(second.text, /not a multiple-choice question/);
+  assert.deepEqual(seen, [
+    { task: 'mcq', images: 0 },
+    { task: 'mcq', images: 1 },
+  ]);
+  await assert.rejects(agent.mcq({ text: '   ' }), (error) => error.status === 400);
+  const bare = createAgentControl({ apiKey: '', generate: async () => ({}), run: async () => passRun() });
+  await assert.rejects(bare.mcq({ text: 'A or B?' }), (error) => error.status === 503);
+});
+
 test('unconfigured agent refuses and the HTTP status hides the key', async () => {
   const local = createAgentControl({ apiKey: '', generate: async () => ({}), run: async () => passRun() });
   await assert.rejects(local.begin({ text: 'hi' }), (error) => error.status === 503);
@@ -631,6 +664,20 @@ test('unconfigured agent refuses and the HTTP status hides the key', async () =>
     assert.equal(open.status, 401);
     const eventsOpen = await fetch(`http://127.0.0.1:${port}/api/agent/events`);
     assert.equal(eventsOpen.status, 401);
+    const mcqOpen = await fetch(`http://127.0.0.1:${port}/api/agent/mcq`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'A or B?' }),
+    });
+    assert.equal(mcqOpen.status, 401);
+    const mcqDenied = await fetch(`http://127.0.0.1:${port}/api/agent/mcq`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie },
+      body: JSON.stringify({ text: 'A or B?' }),
+    });
+    const mcqBody = await mcqDenied.json();
+    assert.equal(mcqDenied.status, 503);
+    assert.equal(JSON.stringify(mcqBody).includes(KEY), false);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

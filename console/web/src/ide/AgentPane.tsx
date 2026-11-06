@@ -87,6 +87,7 @@ function shortStageLabel(item: AgentThoughtEntry): string {
   if (item.task === 'verify') return 'Verify';
   if (item.task === 'fix') return 'Repair';
   if (item.task === 'ask') return 'Answer';
+  if (item.task === 'mcq') return 'MCQ';
   return item.label;
 }
 
@@ -376,7 +377,7 @@ export function AgentPane({
       setImageNotice('');
     }
     if (valid.length === 0) return;
-    if (mode !== 'agent') {
+    if (mode === 'ask') {
       onMode('agent');
     }
     for (const file of valid) {
@@ -503,7 +504,8 @@ export function AgentPane({
         ? sumThoughtMs
         : elapsedMs || sumThoughtMs;
   const hasTelemetry = Boolean(displayedThinking || displayedDraft || thoughtLog.length > 0);
-  const composeBlocked = !configured || (mode === 'ask' && working);
+  const composeBlocked = !configured || ((mode === 'ask' || mode === 'mcq') && working);
+  const canAttach = mode === 'agent' || mode === 'mcq';
 
   return (
     <section
@@ -524,6 +526,15 @@ export function AgentPane({
             onClick={() => onMode('ask')}
           >
             Ask
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={mode === 'mcq'}
+            className={`ide-tab${mode === 'mcq' ? ' active' : ''}`}
+            onClick={() => onMode('mcq')}
+          >
+            MCQ
           </button>
           <button
             type="button"
@@ -625,12 +636,14 @@ export function AgentPane({
         {messages.length === 0 && !hasTelemetry && !working ? (
           <li className="ide-empty-card">
             <p className="ide-empty-title">
-              {mode === 'ask' ? `Ask about ${fileName}` : 'Multi-Domain Coding Agent'}
+              {mode === 'ask' ? `Ask about ${fileName}` : mode === 'mcq' ? 'Multiple choice' : 'Multi-Domain Coding Agent'}
             </p>
             <p className="muted ide-empty">
               {mode === 'ask'
                 ? 'Ask how the current code works, check complexity, or debug an edge case without modifying the editor.'
-                : 'Paste a problem statement or attach screenshots. Algorithms default to C++17 (main.cpp); SQL, Python, Bash, Docker, YAML, and JS problems automatically open in a dedicated tab with syntax & logic verification.'}
+                : mode === 'mcq'
+                  ? 'Paste a multiple-choice question or drop a screenshot. The reply leads with the option letter and a short reason. The editor is not changed.'
+                  : 'Paste a problem statement or attach screenshots. Algorithms default to C++17 (main.cpp); SQL, Python, Bash, Docker, YAML, and JS problems automatically open in a dedicated tab with syntax & logic verification.'}
             </p>
           </li>
         ) : (
@@ -789,7 +802,9 @@ export function AgentPane({
               ? 'Drop one or more images (PNG, JPEG, WebP) here to attach…'
               : mode === 'ask'
                 ? 'Ask about this code, or Ctrl+V / drop problem screenshots…'
-                : phase === 'working'
+                : mode === 'mcq'
+                  ? 'Paste the question and options, or drop a screenshot of the MCQ…'
+                  : phase === 'working'
                   ? 'Send a hint or attach another screenshot to queue for the next attempt…'
                   : phase === 'idle'
                     ? 'Paste problem text or multiple screenshots (Ctrl+V), or drag & drop images…'
@@ -830,7 +845,7 @@ export function AgentPane({
           </div>
         ) : null}
         <div className="ide-compose-bar">
-          {mode === 'agent' ? (
+          {canAttach ? (
             <div className="ide-compose-left">
               <input
                 ref={fileRef}
@@ -865,11 +880,13 @@ export function AgentPane({
             className="btn primary ide-mini"
             disabled={composeBlocked || (draft.trim().length === 0 && images.length === 0)}
           >
-            {mode === 'agent' && working
-              ? 'Queue hint'
-              : mode === 'agent' && phase !== 'idle' && images.length === 0
-                ? 'Guide'
-                : 'Send'}
+            {mode === 'mcq'
+              ? 'Answer'
+              : mode === 'agent' && working
+                ? 'Queue hint'
+                : mode === 'agent' && phase !== 'idle' && images.length === 0
+                  ? 'Guide'
+                  : 'Send'}
           </button>
         </div>
       </form>

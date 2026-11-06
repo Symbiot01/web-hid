@@ -50,12 +50,13 @@ export const SCREEN_MAP: ScreenQuadrant[] = [
   {
     id: 'quad-agent',
     position: 'Top-Left Panel',
-    title: 'AI Coding Agent & Ask Mode',
-    tabs: ['Ask', 'Agent', 'New problem'],
+    title: 'AI Coding Agent, Ask & MCQ',
+    tabs: ['Ask', 'MCQ', 'Agent', 'New problem'],
     summary:
       'Reads problem text or up to 15 screenshots, builds a C++ test harness, writes the solution into main.cpp, and verifies it against sample cases.',
     highlights: [
-      'Ask mode answers questions about the open C++ file without changing your editor code.',
+      'Ask mode answers questions about the open file without changing your editor code.',
+      'MCQ mode answers multiple-choice questions from text or a screenshot. The reply starts with the option letter and does not change the editor.',
       'Agent mode runs the 4-step automated solver: 1. Problem -> 2. Cases -> 3. Wrapper -> 4. Solve & Test.',
       'Accepts direct camera snaps, clipboard image paste (Ctrl+V), or drag-and-drop images (PNG, JPEG, WebP).',
     ],
@@ -208,6 +209,7 @@ python3 scripts/lookcam_bridge.py`,
           'You stay in full control before, during, and after the Agent runs:',
         bullets: [
           'Ask Mode (Safe Read-Only): Switch the top-left toggle to "Ask" to ask questions about time complexity, edge cases, or how the current code in main.cpp works. Ask mode never overwrites your editor or test cases.',
+          'MCQ Mode: Switch to "MCQ" and paste the question with its options, or drop a screenshot. The answer leads with the option letter and a short reason. It does not edit the file or the test cases.',
           '+ Edge cases: Generates tricky boundary test cases (n=1, all-equal, maximum constraints) and verifies the code against them.',
           'Another approach: Tells the Agent to rewrite the solution using a different algorithm or lower complexity.',
           'Cases are wrong: If the OCR misread a sample number from a blurry photo, edit the case in the Test Cases pane or click "Cases are wrong" so the Agent re-evaluates.',
