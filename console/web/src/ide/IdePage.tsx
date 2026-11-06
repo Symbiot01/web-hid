@@ -696,17 +696,24 @@ export function IdePage({ busy, onLogout }: Props) {
         return;
       }
       if (!response.ok || payload.error) {
-        setAgentPhase('needs_human');
-        setAgentActivity('');
-        setMessages((prev) => [...prev, { id: nextId('msg'), role: 'assistant', text: payload.error || 'The agent stopped', kind: 'step' }]);
+        const reason = payload.activity || payload.error || 'The agent stopped';
+        if (payload.phase) {
+          applyAgent(payload);
+          if (!payload.activity) setAgentActivity(reason);
+        } else {
+          setAgentPhase('needs_human');
+          setAgentActivity(reason);
+          setMessages((prev) => [...prev, { id: nextId('msg'), role: 'assistant', text: reason, kind: 'step' }]);
+        }
         return;
       }
       applyAgent(payload);
     } catch {
       askPending.current = false;
+      const reason = 'The agent is unreachable.';
       setAgentPhase(mode === 'ask' ? 'idle' : 'needs_human');
-      setAgentActivity('');
-      setMessages((prev) => [...prev, { id: nextId('msg'), role: 'assistant', text: 'The agent is unreachable.', kind: 'step' }]);
+      setAgentActivity(mode === 'ask' ? '' : reason);
+      setMessages((prev) => [...prev, { id: nextId('msg'), role: 'assistant', text: reason, kind: 'step' }]);
     } finally {
       awaitingAgent.current = false;
     }
@@ -751,14 +758,17 @@ export function IdePage({ busy, onLogout }: Props) {
           return;
         }
         if (payload.error) {
+          const reason = payload.activity || payload.error;
           setAgentPhase('needs_human');
-          setAgentActivity('');
-          setMessages((prev) => [...prev, { id: nextId('msg'), role: 'assistant', text: payload.error as string, kind: 'step' }]);
+          setAgentActivity(reason);
+          setMessages((prev) => [...prev, { id: nextId('msg'), role: 'assistant', text: reason, kind: 'step' }]);
         }
       })
       .catch(() => {
+        const reason = 'The agent is unreachable.';
         setAgentPhase('needs_human');
-        setAgentActivity('');
+        setAgentActivity(reason);
+        setMessages((prev) => [...prev, { id: nextId('msg'), role: 'assistant', text: reason, kind: 'step' }]);
       })
       .finally(() => {
         awaitingAgent.current = false;

@@ -1728,10 +1728,13 @@ textarea:focus-visible {
 }
 
 .ide-agent-hint {
-  flex-basis: 100%;
   margin: 0;
+  max-height: 7.5rem;
+  overflow: auto;
+  white-space: pre-wrap;
   font-size: 0.73rem;
   line-height: 1.35;
+  color: var(--text);
 }
 
 .ide-panel-drop {

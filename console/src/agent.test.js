@@ -1031,3 +1031,68 @@ test('/api/history and /api/agent/check endpoints enforce auth, support search, 
   }
 });
 
+test('needs_human names the failing case and keeps that reason after reload', async () => {
+  const source =
+    '#include <bits/stdc++.h>\nusing namespace std;\nvoid solve(){ cout << "0\\n"; }\nint main(){ long long t=1; while(t--) solve(); return 0; }\n';
+  const { agent } = harness(
+    {
+      identify: [
+        {
+          title: 'Sum',
+          statement: 'Print a plus b.',
+          casesFromProblem: true,
+          cases: [{ input: '2 3\n', expected: '5\n' }],
+          plan: 'Add the two integers.',
+          functionName: 'solve',
+          signature: 'void solve()',
+          format: 'two integers, print the sum',
+        },
+      ],
+      review: [{ ok: true, reason: '' }, { ok: true, reason: '' }, { ok: true, reason: '' }],
+      solve: [{ source, approach: 'Print zero.' }],
+      retry: [
+        { source, approach: 'Print zero again.' },
+        { source, approach: 'Print zero a third time.' },
+      ],
+      fix: [],
+      makeCases: [],
+      ask: [],
+    },
+    [
+      {
+        status: 'ran',
+        compile: { ok: true, stderr: '' },
+        cases: [{ status: 'wrong', actual: '0\n', reason: 'wrong', timeMs: 3 }],
+      },
+      {
+        status: 'ran',
+        compile: { ok: true, stderr: '' },
+        cases: [{ status: 'wrong', actual: '0\n', reason: 'wrong', timeMs: 3 }],
+      },
+      {
+        status: 'ran',
+        compile: { ok: true, stderr: '' },
+        cases: [{ status: 'wrong', actual: '0\n', reason: 'wrong', timeMs: 3 }],
+      },
+    ],
+  );
+  const view = await agent.begin({ text: 'print a+b' });
+  assert.equal(view.phase, 'needs_human');
+  assert.match(view.activity, /0\/1 passed/);
+  assert.match(view.activity, /input "2 3\\n"/);
+  assert.match(view.activity, /expected "5\\n"/);
+  assert.match(view.activity, /actual "0\\n"/);
+  const restored = agent.loadHistoryItem({
+    id: view.problemId,
+    title: 'Sum',
+    phase: 'needs_human',
+    statement: 'Print a plus b.',
+    source,
+    messages: view.messages,
+    cases: view.cases,
+  });
+  assert.equal(restored.phase, 'needs_human');
+  assert.match(restored.activity, /expected "5\\n"/);
+  assert.match(restored.activity, /actual "0\\n"/);
+});
+

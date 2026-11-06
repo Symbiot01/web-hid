@@ -1338,6 +1338,30 @@ function createAgentControl({ apiKey, model, generate, run, onSaveHistory }) {
     notify(true);
   }
 
+  function openFailure() {
+    const failed = [];
+    for (let idx = 0; idx < state.cases.length; idx += 1) {
+      const item = state.cases[idx];
+      if (!item || item.status === 'pass' || item.status === 'idle' || !item.status) continue;
+      const stderr = item.stderr ? ` stderr ${JSON.stringify(clip(item.stderr, 180))}` : '';
+      failed.push(
+        `Case ${idx + 1} (${item.status}): input ${JSON.stringify(clip(item.input, 180))} expected ${JSON.stringify(clip(item.expected, 180))} actual ${JSON.stringify(clip(item.actual, 180))}${stderr}`,
+      );
+    }
+    if (failed.length > 0) {
+      const extra = failed.length > 3 ? `\n…and ${failed.length - 3} more failing case(s).` : '';
+      return `${failed.slice(0, 3).join('\n')}${extra}`;
+    }
+    return clip(state.failure, 900);
+  }
+
+  function askForGuidance(intro) {
+    if (state.phase !== 'working') return;
+    state.phase = 'needs_human';
+    const detail = openFailure();
+    say(detail ? `${intro}\n${detail}` : intro);
+  }
+
   function busy() {
     const error = new Error('Agent is already working');
     error.status = 409;
@@ -1804,8 +1828,9 @@ function createAgentControl({ apiKey, model, generate, run, onSaveHistory }) {
         state.casesVerified = true;
         if (attempt === MAX_APPROACHES) {
           state.phase = 'needs_human';
+          const detail = openFailure();
           say(
-            `${passedCount}/${state.cases.length} passed. The answer is still wrong after ${MAX_APPROACHES} attempts. Send an approach, edit the cases, or say the test cases are wrong.`,
+            `${passedCount}/${state.cases.length} passed. The answer is still wrong after ${MAX_APPROACHES} attempts.${detail ? `\n${detail}` : ''}\nSend an approach, edit the cases, or say the test cases are wrong.`,
           );
           return;
         }
@@ -1827,7 +1852,10 @@ function createAgentControl({ apiKey, model, generate, run, onSaveHistory }) {
       }
       if (fixes >= MAX_COMPILE_FIXES && state.phase !== 'solved') {
         state.phase = 'needs_human';
-        say('It still has syntax errors after 3 repairs. Send what you want changed.');
+        const detail = openFailure();
+        say(
+          `It still has syntax errors after ${MAX_COMPILE_FIXES} repairs.${detail ? `\n${detail}` : ''}\nSend what you want changed.`,
+        );
         return;
       }
     }
@@ -1933,7 +1961,13 @@ function createAgentControl({ apiKey, model, generate, run, onSaveHistory }) {
       : [];
     state.output = clip(typeof item.output === 'string' ? item.output : '', OUTPUT_LIMIT);
     state.failure = '';
-    state.activity = '';
+    const restoredGuidance = [...state.messages]
+      .reverse()
+      .find((msg) => msg && msg.role !== 'user' && msg.kind === 'step' && msg.text);
+    state.activity =
+      state.phase === 'needs_human' || state.phase === 'blocked'
+        ? (restoredGuidance && restoredGuidance.text) || ''
+        : '';
     state.thinking = '';
     state.thinkingLabel = '';
     state.drafting = '';
@@ -2086,6 +2120,7 @@ function createAgentControl({ apiKey, model, generate, run, onSaveHistory }) {
         say(state.approach, 'plan');
       }
       await writeAndRun('solve');
+      askForGuidance('The run stopped before the solution was confirmed.');
       persistHistory();
       return snapshot();
     } catch (error) {
@@ -2121,7 +2156,8 @@ function createAgentControl({ apiKey, model, generate, run, onSaveHistory }) {
       state.running = false;
       if (state.phase === 'working') {
         state.phase = 'needs_human';
-        say('Stopped the current run. Send guidance or retry when ready.');
+        const stoppedAt = state.step && state.step !== 'idle' ? state.step : 'the run';
+        say(`Stopped during ${stoppedAt}. Send guidance or retry when ready.`);
       }
       notify(true);
       return snapshot();
@@ -2260,7 +2296,7 @@ function createAgentControl({ apiKey, model, generate, run, onSaveHistory }) {
         }
         state.hint = text || 'Use all combined problem parts, constraints, and sample cases.';
         await writeAndRun(state.source ? 'retry' : 'solve');
-        if (state.phase === 'working') state.phase = 'needs_human';
+        askForGuidance('The run stopped before the solution was confirmed.');
         persistHistory();
         return snapshot();
       } catch (error) {
@@ -2291,7 +2327,7 @@ function createAgentControl({ apiKey, model, generate, run, onSaveHistory }) {
       notify(true);
       try {
         await addCasesAndTest(userMsg);
-        if (state.phase === 'working') state.phase = 'needs_human';
+        askForGuidance('The run stopped before the solution was confirmed.');
         persistHistory();
         return snapshot();
       } catch (error) {
@@ -2323,7 +2359,7 @@ function createAgentControl({ apiKey, model, generate, run, onSaveHistory }) {
     notify(true);
     try {
       await writeAndRun('retry');
-      if (state.phase === 'working') state.phase = 'needs_human';
+      askForGuidance('The run stopped before the solution was confirmed.');
       persistHistory();
       return snapshot();
     } catch (error) {

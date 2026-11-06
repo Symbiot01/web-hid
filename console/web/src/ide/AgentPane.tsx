@@ -556,7 +556,10 @@ export function AgentPane({
               New problem
             </button>
           ) : null}
-          <span className={`ide-agent-phase ide-agent-phase-${phase}`}>
+          <span
+            className={`ide-agent-phase ide-agent-phase-${phase}`}
+            title={!working && activity ? activity : phaseLabel[phase]}
+          >
             {configured ? phaseLabel[phase] : 'Not configured'}
           </span>
         </div>
@@ -599,6 +602,11 @@ export function AgentPane({
               </button>
             ) : null}
           </div>
+          {!working && (phase === 'needs_human' || phase === 'blocked') && activity ? (
+            <p className="ide-agent-hint" role="status">
+              {activity}
+            </p>
+          ) : null}
         </div>
       ) : null}
       <ol
