@@ -158,7 +158,8 @@ function consoleConfig(deviceToken) {
     lookcamPassword: '',
     captureToken: '',
     geminiApiKey: '',
-    geminiModel: 'gemini-4-argon',
+    geminiModel: 'gemini-4-carbon',
+    geminiMcqModel: 'gemini-4-hydrogen',
     deviceToken,
   };
 }

@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   MODEL,
+  MCQ_MODEL,
   canonicalFileName,
   cleanSource,
   createAgentControl,
@@ -74,7 +75,8 @@ test('parses model JSON and checks image bytes', () => {
     '#include <iostream>\nint main() { while (getline(cin, line)) { while (low <= high) { low++; } } return 0; }';
   const expanded = cleanSource(squished);
   assert.ok(expanded.split('\n').length >= 6);
-  assert.equal(MODEL, 'gemini-4-argon');
+  assert.equal(MODEL, 'gemini-4-carbon');
+  assert.equal(MCQ_MODEL, 'gemini-4-hydrogen');
   assert.equal(wantsMoreCases('add few more test cases from your side to do even more thorough testing'), true);
   assert.equal(wantsMoreCases('', 'more_cases'), true);
   assert.equal(wantsMoreCases('use dynamic programming instead'), false);
@@ -1257,6 +1259,62 @@ test('mcq persists every question, all screenshots, and solution into solved_his
   assert.equal(restored.fileName, 'mcq.md');
 
   history.close();
+});
+
+test('createGemini routes mcq tasks to gemini-4-hydrogen and other tasks to gemini-4-carbon', async () => {
+  const urls = [];
+  const bodies = [];
+  const gen = createGemini({
+    apiKey: KEY,
+    fetchImpl: async (url, opts) => {
+      urls.push(url);
+      bodies.push(JSON.parse(opts.body));
+      const isMcq = urls.length === 1;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [
+            {
+              finishReason: 'STOP',
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify(
+                      isMcq
+                        ? {
+                            title: 'Sample MCQ',
+                            question: '2 + 2 = ?',
+                            answers: [{ number: 1, question: '2 + 2 = ?', choice: 'B', option: '4', reason: '2 + 2 = 4.' }],
+                            note: '',
+                          }
+                        : { text: 'It prints 42.' },
+                    ),
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      };
+    },
+  });
+
+  const mcqOut = await gen('mcq', { text: '2+2?\nA 3\nB 4' });
+  assert.equal(mcqOut.answers[0].choice, 'B');
+  const askOut = await gen('ask', { text: 'What does this do?', source: 'int main(){return 0;}' });
+  assert.equal(askOut.text, 'It prints 42.');
+
+  assert.equal(
+    urls[0],
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-4-hydrogen:streamGenerateContent?alt=sse',
+  );
+  assert.equal(
+    urls[1],
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-4-carbon:streamGenerateContent?alt=sse',
+  );
+  assert.equal(bodies[0].generationConfig.thinkingConfig.thinkingLevel, 'HIGH');
+  assert.equal(bodies[1].generationConfig.thinkingConfig.thinkingLevel, 'HIGH');
 });
 
 

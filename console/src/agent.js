@@ -7,7 +7,9 @@ const {
   checkSyntax,
 } = require('./syntaxCheck');
 
-const MODEL = 'gemini-4-argon';
+const MODEL = 'gemini-4-carbon';
+const MCQ_MODEL = 'gemini-4-hydrogen';
+const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 const MAX_APPROACHES = 3;
 const MAX_COMPILE_FIXES = 3;
 const CASE_LIMIT = 12;
@@ -1001,10 +1003,18 @@ async function collectModelParts(response, onThought, onVisible) {
   return bucket;
 }
 
-function createGemini({ apiKey, model, fetchImpl, onThought, onProgress }) {
+function safeModelName(candidate, fallback) {
+  const value = typeof candidate === 'string' ? candidate.trim() : '';
+  return MODEL_NAME_RE.test(value) ? value : fallback;
+}
+
+function createGemini({ apiKey, model, mcqModel, fetchImpl, onThought, onProgress }) {
   const fetchFn = fetchImpl || fetch;
-  const supportsThinkingLevel = /^gemini-[34]/i.test(String(model || MODEL));
+  const defaultModel = safeModelName(model, MODEL);
+  const resolvedMcqModel = safeModelName(mcqModel, MCQ_MODEL);
   async function generate(task, context) {
+    const activeModel = task === 'mcq' ? resolvedMcqModel : defaultModel;
+    const supportsThinkingLevel = /^gemini-[34]/i.test(activeModel);
     const built = promptFor(task, context);
     const parts = [{ text: built.user }];
     const imageList = Array.isArray(context.images)
@@ -1092,7 +1102,7 @@ function createGemini({ apiKey, model, fetchImpl, onThought, onProgress }) {
           : timeoutSignal;
       try {
         response = await fetchFn(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`,
+          `https://generativelanguage.googleapis.com/v1beta/models/${activeModel}:streamGenerateContent?alt=sse`,
           {
             method: 'POST',
             headers: {
@@ -1188,7 +1198,7 @@ function formatRun(result) {
     .join('\n\n');
 }
 
-function createAgentControl({ apiKey, model, generate, run, onSaveHistory }) {
+function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHistory }) {
   const secret = apiKey || '';
   const listeners = new Set();
   let flushTimer = null;
@@ -1341,6 +1351,7 @@ function createAgentControl({ apiKey, model, generate, run, onSaveHistory }) {
     createGemini({
       apiKey: secret,
       model: model || MODEL,
+      mcqModel: mcqModel || MCQ_MODEL,
       onThought: (text, meta) => thoughtSink.fn(text, meta),
       onProgress: (evt) => thoughtSink.progress(evt),
     });
@@ -2736,4 +2747,5 @@ module.exports = {
   wantsMoreCases,
   formatMcqAnswer,
   MODEL,
+  MCQ_MODEL,
 };

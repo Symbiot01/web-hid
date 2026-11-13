@@ -40,4 +40,5 @@ Leave `CAPTURE_TOKEN` empty to refuse the capture agent. Leave `DEVICE_TOKEN` em
 | `DEVICE_TOKEN` | no | ESP32 `/ws/device` token, min 16. Empty disables HID. Never sent to the browser |
 | `CAPTURE_TOKEN` | no | Empty refuses the capture agent |
 | `GEMINI_API_KEY` | no | Coding agent. Empty disables it. Never sent to the browser |
-| `GEMINI_MODEL` | no | Defaults to `gemini-4-argon` |
+| `GEMINI_MODEL` | no | Defaults to `gemini-4-carbon` (used for coding, Ask, and verification) |
+| `GEMINI_MCQ_MODEL` | no | Defaults to `gemini-4-hydrogen` (used for MCQ mode) |

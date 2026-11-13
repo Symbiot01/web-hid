@@ -85,6 +85,7 @@ function createApp(opts) {
     createAgentControl({
       apiKey: config.geminiApiKey || '',
       model: config.geminiModel,
+      mcqModel: config.geminiMcqModel,
       onSaveHistory: (record) => history.save(record),
       run: (source, cases) => {
         const body = { source, mode: 'tests', cases };
