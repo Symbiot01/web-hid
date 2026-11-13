@@ -1,9 +1,14 @@
 node_modules
 web/node_modules
-npm-debug.log
+npm-debug.log*
 .env
+.env.*
 .git
 .gitignore
 *.md
 .DS_Store
 src/public
+**/*.test.js
+deploy
+Dockerfile
+.dockerignore

@@ -1,28 +1,34 @@
 # syntax=docker/dockerfile:1
 
+# Heavy OS packages live in their own stage so apk only re-runs when this
+# stage changes (or the base tag moves), not on every app/source rebuild.
+FROM node:22-alpine AS runtime-base
+RUN apk add --no-cache ffmpeg g++ python3 bash util-linux-misc bubblewrap \
+  && addgroup -S app && adduser -S -G app app \
+  && mkdir -p /app/data && chown -R app:app /app/data
+
 FROM node:22-alpine AS web-build
 WORKDIR /app/web
 COPY web/package.json web/package-lock.json* ./
 # Coolify often sets NODE_ENV=production; still need vite/typescript to build.
 ENV NODE_ENV=development
-RUN npm ci --include=dev
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --include=dev
 COPY web/ ./
 RUN npm run build
 
 FROM node:22-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --omit=dev
 
-FROM node:22-alpine
+FROM runtime-base
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOST=0.0.0.0
 
-RUN apk add --no-cache ffmpeg g++ python3 bash util-linux-misc bubblewrap \
-  && addgroup -S app && adduser -S -G app app \
-  && mkdir -p /app/data && chown -R app:app /app/data
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
 COPY src ./src

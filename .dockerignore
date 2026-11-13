@@ -1,5 +1,5 @@
 **/node_modules
-**/npm-debug.log
+**/npm-debug.log*
 **/.env
 **/.env.*
 .git
@@ -9,5 +9,18 @@
 *.pcapng
 .DS_Store
 console/src/public
+console/**/*.test.js
+console/deploy
 bridge
 firmware
+capture_app
+hid_simulator
+ebpf_concealment_detect_bench
+drm_kms_capture_bench
+debug_wifi*
+.github
+*.apk
+Dockerfile
+.dockerignore
+console/Dockerfile
+console/.dockerignore

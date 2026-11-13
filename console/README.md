@@ -24,6 +24,8 @@ npm run dev
 
 Set **Base Directory** to `/console` and **Dockerfile Location** to `/Dockerfile` in Coolify. The image builds `web/`, serves it from `src/public`, and listens on `PORT` (image default `3000`) and `HOST` `0.0.0.0`. Set `TRUST_PROXY=1` behind the Coolify proxy. `GET /healthz` is the health check. The runtime image includes ffmpeg for the camera ingest.
 
+For faster CD rebuilds, keep **BuildKit** enabled on the Coolify host (default on modern Docker). The Dockerfile isolates `apk` packages in a `runtime-base` stage and uses BuildKit npm cache mounts so dependency installs reuse cache across deploys when lockfiles are unchanged.
+
 Leave `CAPTURE_TOKEN` empty to refuse the capture agent. Leave `DEVICE_TOKEN` empty to refuse the HID keyboard. The ESP32-S3 dials this service at `/ws/device?token=…` using the same host and port. Set `WS_HOST`, `WS_PORT`, and `DEVICE_TOKEN` in the firmware `secrets.h` to match.
 
 ## Environment
