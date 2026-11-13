@@ -551,14 +551,23 @@ export function HistoryPage() {
                               <div key={`mcq-ans-${idx}`} className="hist-mcq-item">
                                 <div className="hist-mcq-item-head">
                                   <span className="hist-badge hist-badge-ok">
-                                    Answer #{idx + 1}: {c.expected || 'Answered'}
+                                    Final Answer #{idx + 1}: {c.expected || 'Answered'}
                                   </span>
                                 </div>
                                 {c.input ? (
                                   <p className="hist-mcq-q">{c.input}</p>
                                 ) : null}
+                                {c.actual && c.actual !== c.expected ? (
+                                  <div>
+                                    <span className="muted" style={{ fontSize: '0.72rem' }}>Solution / Working</span>
+                                    <pre className="hist-pre">{c.actual}</pre>
+                                  </div>
+                                ) : null}
                                 {c.stderr ? (
-                                  <pre className="hist-pre">{c.stderr}</pre>
+                                  <div>
+                                    <span className="muted" style={{ fontSize: '0.72rem' }}>Why this is the right answer</span>
+                                    <pre className="hist-pre">{c.stderr}</pre>
+                                  </div>
                                 ) : null}
                               </div>
                             ))}
@@ -703,16 +712,18 @@ export function HistoryPage() {
                             </span>
                             <pre className="hist-pre">{c.expected || '(empty)'}</pre>
                           </div>
-                          {c.actual && detail.problemType !== 'mcq' ? (
+                          {c.actual && (detail.problemType !== 'mcq' || c.actual !== c.expected) ? (
                             <div>
-                              <span className="muted" style={{ fontSize: '0.72rem' }}>Actual / Verified</span>
+                              <span className="muted" style={{ fontSize: '0.72rem' }}>
+                                {detail.problemType === 'mcq' ? 'Solution / Working' : 'Actual / Verified'}
+                              </span>
                               <pre className="hist-pre">{c.actual}</pre>
                             </div>
                           ) : null}
                           {c.stderr ? (
                             <div>
                               <span className="muted" style={{ fontSize: '0.72rem' }}>
-                                {detail.problemType === 'mcq' ? 'Explanation' : 'Notes / Stderr'}
+                                {detail.problemType === 'mcq' ? 'Why this is the right answer' : 'Notes / Stderr'}
                               </span>
                               <pre className="hist-pre">{c.stderr}</pre>
                             </div>

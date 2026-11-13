@@ -1178,20 +1178,25 @@ test('mcq persists every question, all screenshots, and solution into solved_his
       }
       return {
         title: 'Water Filter Impurity Reduction',
+        category: 'solution',
         question: 'Determine percentage of combined impurity reduction from Orion Filter.',
         answers: [
           {
             number: 1,
+            category: 'solution',
             question: 'What percentage of combined impurity reduction came from Orion Filter? (A) 55.6% (B) 60.5% (C) 62.0% (D) 57.9%',
             choice: 'D',
             option: '57.9%',
+            solution: 'Orion impurity: 28 -> 6 (reduction = 22). Vega impurity: 24 -> 8 (reduction = 16). Total = 38; 22/38 * 100 = 57.89% ≈ 57.9%.',
             reason: `Orion reduction = 22, Vega reduction = 16, total = 38, so 22/38 = 57.9%. ${KEY}`,
           },
           {
             number: 2,
+            category: 'reasoning',
             question: 'Which option explains Brand X sales?',
             choice: 'Option 1',
             option: 'Over-the-counter availability',
+            solution: 'Premise: Brand X has high sales. Alternative cause: wider retail availability without prescription.',
             reason: 'Provides an alternative explanation.',
           },
         ],
@@ -1215,8 +1220,12 @@ test('mcq persists every question, all screenshots, and solution into solved_his
     ],
   });
   assert.equal(firstMcq.text.includes(KEY), false);
-  assert.match(firstMcq.text, /1\. D — 57\.9%/);
-  assert.match(firstMcq.text, /2\. Option 1 — Over-the-counter availability/);
+  assert.match(firstMcq.text, /1\. D — 57\.9% · Solution-based/);
+  assert.match(firstMcq.text, /\*\*Final Answer:\*\* D — 57\.9%/);
+  assert.match(firstMcq.text, /\*\*Solution \/ Working:\*\*/);
+  assert.match(firstMcq.text, /22\/38 \* 100 = 57\.89%/);
+  assert.match(firstMcq.text, /\*\*Why this is the right answer:\*\*/);
+  assert.match(firstMcq.text, /2\. Option 1 — Over-the-counter availability · Logical Reasoning/);
 
   const secondMcq = await agent.mcq({
     text: 'Weighted average of 2@$10 and 3@$25?',

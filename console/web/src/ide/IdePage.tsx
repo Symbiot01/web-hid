@@ -103,6 +103,26 @@ export function IdePage({ busy, onLogout }: Props) {
   const [output, setOutput] = useState('');
   const [mode, setMode] = useState<AgentMode>('agent');
   const [messages, setMessages] = useState<AgentMessage[]>([]);
+  const [mcqMessages, setMcqMessages] = useState<AgentMessage[]>([]);
+  const [mcqWorking, setMcqWorking] = useState(false);
+  const [mcqActivity, setMcqActivity] = useState('');
+  const [mcqThinking, setMcqThinking] = useState('');
+  const [mcqThinkingLabel, setMcqThinkingLabel] = useState('');
+  const [mcqDrafting, setMcqDrafting] = useState('');
+  const [mcqDraftChars, setMcqDraftChars] = useState(0);
+  const [mcqStartedAt, setMcqStartedAt] = useState<number | null>(null);
+  const [mcqElapsedMs, setMcqElapsedMs] = useState(0);
+  const [mcqThoughtLog, setMcqThoughtLog] = useState<AgentThoughtEntry[]>([]);
+  const [askMessages, setAskMessages] = useState<AgentMessage[]>([]);
+  const [askWorking, setAskWorking] = useState(false);
+  const [askActivity, setAskActivity] = useState('');
+  const [askThinking, setAskThinking] = useState('');
+  const [askThinkingLabel, setAskThinkingLabel] = useState('');
+  const [askDrafting, setAskDrafting] = useState('');
+  const [askDraftChars, setAskDraftChars] = useState(0);
+  const [askStartedAt, setAskStartedAt] = useState<number | null>(null);
+  const [askElapsedMs, setAskElapsedMs] = useState(0);
+  const [askThoughtLog, setAskThoughtLog] = useState<AgentThoughtEntry[]>([]);
   const [agentPhase, setAgentPhase] = useState<AgentPhase>('idle');
   const [agentProblemType, setAgentProblemType] = useState<ProblemType>('cpp');
   const [agentFileName, setAgentFileName] = useState('main.cpp');
@@ -421,12 +441,35 @@ export function IdePage({ busy, onLogout }: Props) {
   }
 
   const agentOutput = useRef('');
-  const askPending = useRef(false);
+  const pendingQuickMode = useRef<'ask' | 'mcq' | null>(null);
   const lastAppliedSourceRef = useRef<string | null>(null);
   const lastAppliedFileRef = useRef<string | null>(null);
 
   function applyAgent(view: AgentView) {
     setAgentReady(view.configured);
+    const activeQuickMode = pendingQuickMode.current;
+    if (activeQuickMode === 'mcq') {
+      setMcqThinking(view.thinking ?? '');
+      setMcqThinkingLabel(view.thinkingLabel ?? '');
+      setMcqDrafting(view.drafting ?? '');
+      setMcqDraftChars(view.draftChars ?? 0);
+      if (Array.isArray(view.thoughtLog)) {
+        const mcqLogs = view.thoughtLog.filter((item) => item.task === 'mcq');
+        if (mcqLogs.length > 0) setMcqThoughtLog(mcqLogs);
+      }
+      return;
+    }
+    if (activeQuickMode === 'ask') {
+      setAskThinking(view.thinking ?? '');
+      setAskThinkingLabel(view.thinkingLabel ?? '');
+      setAskDrafting(view.drafting ?? '');
+      setAskDraftChars(view.draftChars ?? 0);
+      if (Array.isArray(view.thoughtLog)) {
+        const askLogs = view.thoughtLog.filter((item) => item.task === 'ask');
+        if (askLogs.length > 0) setAskThoughtLog(askLogs);
+      }
+      return;
+    }
     setAgentThinking(view.thinking ?? '');
     setAgentThinkingLabel(view.thinkingLabel ?? '');
     setAgentDrafting(view.drafting ?? '');
@@ -434,10 +477,7 @@ export function IdePage({ busy, onLogout }: Props) {
     setAgentStartedAt(view.startedAt ?? null);
     setAgentElapsedMs(view.elapsedMs ?? 0);
     if (Array.isArray(view.thoughtLog)) {
-      setAgentThoughtLog(view.thoughtLog);
-    }
-    if (askPending.current) {
-      return;
+      setAgentThoughtLog(view.thoughtLog.filter((item) => item.task !== 'mcq' && item.task !== 'ask'));
     }
     const targetFileName = view.fileName || 'main.cpp';
     const targetProblemType = view.problemType || problemTypeForFile(targetFileName);
@@ -591,12 +631,12 @@ export function IdePage({ busy, onLogout }: Props) {
   }, []);
 
   useEffect(() => {
-    if (agentPhase !== 'working') return;
+    if (agentPhase !== 'working' || pendingQuickMode.current !== null) return;
     const timer = window.setInterval(() => {
       void fetch('/api/agent', { credentials: 'same-origin' })
         .then((response) => (response.ok ? response.json() : null))
         .then((view: AgentView | null) => {
-          if (!view) return;
+          if (!view || pendingQuickMode.current !== null) return;
           if (awaitingAgent.current && view.phase !== 'working') return;
           applyAgent(view);
         })
@@ -633,24 +673,44 @@ export function IdePage({ busy, onLogout }: Props) {
         { id: nextId('msg'), role: 'user', text: userLabel, kind: 'user' },
         { id: nextId('msg'), role: 'assistant', text: live, kind: 'step' },
       ]);
+    } else if (mode === 'mcq') {
+      setMcqMessages((prev) => [...prev, { id: nextId('msg'), role: 'user', text: userLabel, kind: 'user' }]);
     } else {
-      setMessages((prev) => [...prev, { id: nextId('msg'), role: 'user', text: userLabel, kind: 'user' }]);
+      setAskMessages((prev) => [...prev, { id: nextId('msg'), role: 'user', text: userLabel, kind: 'user' }]);
     }
     try {
       if (mode === 'ask' || mode === 'mcq') {
-        askPending.current = true;
-        setAgentPhase('working');
-        setAgentStartedAt(Date.now());
-        setAgentActivity(
-          mode === 'mcq' ? 'Reading the choices…' : `Analyzing ${active?.name ?? 'main.cpp'} and preparing an answer…`,
-        );
+        const quickMode = mode;
+        const startedAt = Date.now();
+        pendingQuickMode.current = quickMode;
+        if (quickMode === 'mcq') {
+          setMcqWorking(true);
+          setMcqStartedAt(startedAt);
+          setMcqElapsedMs(0);
+          setMcqThinking('');
+          setMcqThinkingLabel('answering the choices');
+          setMcqDrafting('');
+          setMcqDraftChars(0);
+          setMcqThoughtLog([]);
+          setMcqActivity('Solving and verifying the choices…');
+        } else {
+          setAskWorking(true);
+          setAskStartedAt(startedAt);
+          setAskElapsedMs(0);
+          setAskThinking('');
+          setAskThinkingLabel('answering');
+          setAskDrafting('');
+          setAskDraftChars(0);
+          setAskThoughtLog([]);
+          setAskActivity(`Analyzing ${active?.name ?? 'main.cpp'} and preparing an answer…`);
+        }
         try {
-          const response = await fetch(mode === 'mcq' ? '/api/agent/mcq' : '/api/agent/ask', {
+          const response = await fetch(quickMode === 'mcq' ? '/api/agent/mcq' : '/api/agent/ask', {
             method: 'POST',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(
-              mode === 'mcq'
+              quickMode === 'mcq'
                 ? {
                     text,
                     images: images.map((item) => ({ mime: item.mime, data: item.base64 })),
@@ -667,14 +727,43 @@ export function IdePage({ busy, onLogout }: Props) {
           const replyText = response.ok
             ? payload.text || payload.error || 'No answer.'
             : payload.error || `Request failed (${response.status})`;
-          setMessages((prev) => [
-            ...prev,
-            { id: nextId('msg'), role: 'assistant', text: replyText },
-          ]);
+          if (quickMode === 'mcq') {
+            setMcqMessages((prev) => [
+              ...prev,
+              { id: nextId('msg'), role: 'assistant', text: replyText },
+            ]);
+          } else {
+            setAskMessages((prev) => [
+              ...prev,
+              { id: nextId('msg'), role: 'assistant', text: replyText },
+            ]);
+          }
         } finally {
-          askPending.current = false;
-          setAgentPhase('idle');
-          setAgentActivity('');
+          const elapsed = Math.max(0, Date.now() - startedAt);
+          if (pendingQuickMode.current === quickMode) pendingQuickMode.current = null;
+          if (quickMode === 'mcq') {
+            setMcqWorking(false);
+            setMcqElapsedMs(elapsed);
+            setMcqActivity('');
+            setMcqThoughtLog((prev) =>
+              prev.map((item) =>
+                item.status === 'thinking' || item.status === 'drafting'
+                  ? { ...item, status: 'done', elapsedMs: Math.max(item.elapsedMs, Date.now() - item.startedAt) }
+                  : item,
+              ),
+            );
+          } else {
+            setAskWorking(false);
+            setAskElapsedMs(elapsed);
+            setAskActivity('');
+            setAskThoughtLog((prev) =>
+              prev.map((item) =>
+                item.status === 'thinking' || item.status === 'drafting'
+                  ? { ...item, status: 'done', elapsedMs: Math.max(item.elapsedMs, Date.now() - item.startedAt) }
+                  : item,
+              ),
+            );
+          }
         }
         return;
       }
@@ -724,21 +813,60 @@ export function IdePage({ busy, onLogout }: Props) {
       }
       applyAgent(payload);
     } catch {
-      askPending.current = false;
+      const quickMode = pendingQuickMode.current;
+      pendingQuickMode.current = null;
       const reason = 'The agent is unreachable.';
-      setAgentPhase(mode === 'ask' || mode === 'mcq' ? 'idle' : 'needs_human');
-      setAgentActivity(mode === 'ask' || mode === 'mcq' ? '' : reason);
-      setMessages((prev) => [...prev, { id: nextId('msg'), role: 'assistant', text: reason, kind: 'step' }]);
+      if (quickMode === 'mcq' || mode === 'mcq') {
+        setMcqWorking(false);
+        setMcqActivity('');
+        setMcqMessages((prev) => [...prev, { id: nextId('msg'), role: 'assistant', text: reason, kind: 'step' }]);
+      } else if (quickMode === 'ask' || mode === 'ask') {
+        setAskWorking(false);
+        setAskActivity('');
+        setAskMessages((prev) => [...prev, { id: nextId('msg'), role: 'assistant', text: reason, kind: 'step' }]);
+      } else {
+        setAgentPhase('needs_human');
+        setAgentActivity(reason);
+        setMessages((prev) => [...prev, { id: nextId('msg'), role: 'assistant', text: reason, kind: 'step' }]);
+      }
     } finally {
       awaitingAgent.current = false;
     }
   }
 
   function guide(action: 'retry' | 'cases_wrong' | 'more_cases' | 'reset' | 'cancel') {
+    if (action === 'reset' && mode === 'mcq') {
+      setMcqMessages([]);
+      setMcqActivity('');
+      setMcqThinking('');
+      setMcqThinkingLabel('');
+      setMcqDrafting('');
+      setMcqDraftChars(0);
+      setMcqStartedAt(null);
+      setMcqElapsedMs(0);
+      setMcqThoughtLog([]);
+      setSnapNote('');
+      setIncomingFiles([]);
+      return;
+    }
+    if (action === 'reset' && mode === 'ask') {
+      setAskMessages([]);
+      setAskActivity('');
+      setAskThinking('');
+      setAskThinkingLabel('');
+      setAskDrafting('');
+      setAskDraftChars(0);
+      setAskStartedAt(null);
+      setAskElapsedMs(0);
+      setAskThoughtLog([]);
+      setSnapNote('');
+      setIncomingFiles([]);
+      return;
+    }
     if (action === 'reset' || action === 'cancel') {
       if (action === 'reset') {
         agentOutput.current = '';
-        askPending.current = false;
+        pendingQuickMode.current = null;
         setMessages([]);
         setAgentActivity('');
         setAgentThinking('');
@@ -888,7 +1016,21 @@ export function IdePage({ busy, onLogout }: Props) {
         first={
           <AgentPane
             mode={mode}
-            phase={agentPhase}
+            phase={
+              mode === 'mcq'
+                ? mcqWorking
+                  ? 'working'
+                  : mcqMessages.some((m) => m.role === 'assistant')
+                    ? 'solved'
+                    : 'idle'
+                : mode === 'ask'
+                  ? askWorking
+                    ? 'working'
+                    : askMessages.some((m) => m.role === 'assistant')
+                      ? 'solved'
+                      : 'idle'
+                  : agentPhase
+            }
             problemType={agentProblemType}
             fileName={agentFileName}
             step={agentStep}
@@ -898,17 +1040,19 @@ export function IdePage({ busy, onLogout }: Props) {
             entry={agentEntry}
             signature={agentSignature}
             format={agentFormat}
-            activity={agentActivity}
-            thinking={agentThinking}
-            thinkingLabel={agentThinkingLabel}
-            drafting={agentDrafting}
-            draftChars={agentDraftChars}
-            startedAt={agentStartedAt}
-            elapsedMs={agentElapsedMs}
-            thoughtLog={agentThoughtLog}
+            activity={mode === 'mcq' ? mcqActivity : mode === 'ask' ? askActivity : agentActivity}
+            thinking={mode === 'mcq' ? mcqThinking : mode === 'ask' ? askThinking : agentThinking}
+            thinkingLabel={
+              mode === 'mcq' ? mcqThinkingLabel : mode === 'ask' ? askThinkingLabel : agentThinkingLabel
+            }
+            drafting={mode === 'mcq' ? mcqDrafting : mode === 'ask' ? askDrafting : agentDrafting}
+            draftChars={mode === 'mcq' ? mcqDraftChars : mode === 'ask' ? askDraftChars : agentDraftChars}
+            startedAt={mode === 'mcq' ? mcqStartedAt : mode === 'ask' ? askStartedAt : agentStartedAt}
+            elapsedMs={mode === 'mcq' ? mcqElapsedMs : mode === 'ask' ? askElapsedMs : agentElapsedMs}
+            thoughtLog={mode === 'mcq' ? mcqThoughtLog : mode === 'ask' ? askThoughtLog : agentThoughtLog}
             cases={cases}
             configured={agentReady}
-            messages={messages}
+            messages={mode === 'mcq' ? mcqMessages : mode === 'ask' ? askMessages : messages}
             incomingFiles={incomingFiles}
             onClearIncoming={() => setIncomingFiles([])}
             onMode={setMode}

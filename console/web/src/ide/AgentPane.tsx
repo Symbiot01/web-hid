@@ -136,6 +136,9 @@ function renderFormattedText(text: string): ReactNode {
         {lines.map((line, lineIdx) => {
           const trimmed = line.trim();
           if (!trimmed) return <div key={`sp-${lineIdx}`} className="ide-md-spacer" />;
+          if (/^-{3,}$/.test(trimmed)) {
+            return <hr key={`hr-${lineIdx}`} className="ide-md-hr" />;
+          }
           if (/^#{1,4}\s+/.test(trimmed)) {
             return (
               <p key={`h-${lineIdx}`} className="ide-md-heading">
@@ -246,6 +249,7 @@ export function AgentPane({
   const feedRef = useRef<HTMLOListElement>(null);
   const draftRef = useRef<HTMLPreElement>(null);
   const thinkClosed = useRef(false);
+  const wasWorkingRef = useRef(false);
   const working = phase === 'working';
 
   const phaseLabel: Record<AgentPhase, string> = {
@@ -315,8 +319,12 @@ export function AgentPane({
   }, [displayedThinking, displayedDraft, autoFollow, working]);
 
   useEffect(() => {
+    if (wasWorkingRef.current && !working && (mode === 'mcq' || mode === 'ask')) {
+      setThinkOpen(false);
+    }
+    wasWorkingRef.current = working;
     if (!working) thinkClosed.current = false;
-  }, [working]);
+  }, [working, mode]);
 
   useEffect(() => {
     if (!incomingFiles || incomingFiles.length === 0) return;
@@ -517,8 +525,132 @@ export function AgentPane({
         ? sumThoughtMs
         : elapsedMs || sumThoughtMs;
   const hasTelemetry = Boolean(displayedThinking || displayedDraft || thoughtLog.length > 0);
-  const composeBlocked = !configured || ((mode === 'ask' || mode === 'mcq') && working);
+  const composeBlocked = !configured || working;
   const canAttach = mode === 'agent' || mode === 'mcq';
+  const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
+  const showTelemetryBeforeLastAnswer =
+    hasTelemetry && (mode === 'mcq' || mode === 'ask') && !working && lastMessage?.role === 'assistant';
+  const leadingMessages = showTelemetryBeforeLastAnswer ? messages.slice(0, -1) : messages;
+  const trailingAnswer = showTelemetryBeforeLastAnswer ? lastMessage : null;
+
+  function renderMessage(message: AgentMessage) {
+    const kind: AgentKind | 'note' = message.kind || (message.role === 'user' ? 'user' : 'note');
+    const label = message.role === 'user' ? 'You' : kind === 'step' ? 'Status' : 'Agent';
+    return (
+      <li key={message.id} className={`ide-msg ide-msg-${message.role} ide-msg-${kind}`}>
+        {kind === 'problem' || kind === 'plan' ? null : <span className="ide-msg-role">{label}</span>}
+        {body(message)}
+      </li>
+    );
+  }
+
+  const telemetryBlock = hasTelemetry ? (
+    <li className="ide-msg ide-msg-assistant ide-msg-thoughts">
+      <details
+        className="ide-think"
+        open={thinkOpen}
+        onToggle={(event) => {
+          const next = event.currentTarget.open;
+          setThinkOpen(next);
+          thinkClosed.current = working && !next;
+        }}
+      >
+        <summary className="ide-think-summary">
+          <span className="ide-think-title">
+            {working
+              ? activeThought?.status === 'drafting'
+                ? 'Drafting'
+                : 'Thinking'
+              : 'Thoughts'}
+            {displayedLabel ? ` · ${displayedLabel}` : ''}
+          </span>
+          <span className="ide-think-meta" onClick={(e) => e.stopPropagation()}>
+            {thoughtLog.length > 1 ? (
+              <span className="ide-think-stat">{thoughtLog.length} stages</span>
+            ) : null}
+            {displayedThinking ? (
+              <span className="ide-think-stat">{formatCharCount(displayedThinking.length)}</span>
+            ) : null}
+            {working ? (
+              <button
+                type="button"
+                className={`ide-think-btn${autoFollow ? ' active' : ''}`}
+                title="Auto-scroll latest thoughts"
+                onClick={() => setAutoFollow((prev) => !prev)}
+              >
+                {autoFollow ? 'Follow' : 'Paused'}
+              </button>
+            ) : null}
+            {displayedThinking ? (
+              <button
+                type="button"
+                className="ide-think-btn"
+                title="Copy reasoning trace"
+                onClick={copyThoughtText}
+              >
+                {copiedThoughts ? 'Copied' : 'Copy'}
+              </button>
+            ) : null}
+          </span>
+        </summary>
+        {thoughtLog.length > 0 ? (
+          <div className="ide-think-stages" role="tablist" aria-label="LLM reasoning stages">
+            {thoughtLog.map((item, idx) => {
+              const isSelected = activeThought ? activeThought.id === item.id : idx === thoughtLog.length - 1;
+              const itemElapsed =
+                item.status === 'thinking' || item.status === 'drafting'
+                  ? Math.max(item.elapsedMs, liveNow - item.startedAt)
+                  : item.elapsedMs;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={isSelected}
+                  className={`ide-think-stage ide-think-stage-${item.status}${isSelected ? ' active' : ''}`}
+                  onClick={() => {
+                    setSelectedThoughtId(item.id);
+                    if (item.id !== latestThought?.id) {
+                      setAutoFollow(false);
+                    }
+                  }}
+                >
+                  <span className={`ide-stage-dot ide-stage-dot-${item.status}`} />
+                  <span>
+                    {idx + 1}. {shortStageLabel(item)}
+                  </span>
+                  <span className="ide-stage-time">{formatDuration(itemElapsed)}</span>
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+        {displayedThinking ? (
+          <div className="ide-think-body">{renderFormattedText(displayedThinking)}</div>
+        ) : working ? (
+          <div className="ide-think-body muted">Waiting for first reasoning tokens from model…</div>
+        ) : null}
+        {displayedDraft ? (
+          <details
+            className="ide-draft-box"
+            open={working && (activeThought?.status === 'drafting' || draftChars > 0)}
+          >
+            <summary className="ide-draft-head">
+              <span>
+                {working && activeThought?.status === 'drafting'
+                  ? 'Live Output Stream'
+                  : 'Stage Output Draft'}
+              </span>
+              <span>{formatCharCount(displayedDraftChars || displayedDraft.length)}</span>
+            </summary>
+            <pre ref={draftRef} className="ide-draft-pre">
+              {displayedDraft}
+            </pre>
+          </details>
+        ) : null}
+      </details>
+    </li>
+  ) : null;
 
   return (
     <section
@@ -667,129 +799,15 @@ export function AgentPane({
               {mode === 'ask'
                 ? 'Ask how the current code works, check complexity, or debug an edge case without modifying the editor.'
                 : mode === 'mcq'
-                  ? 'Paste a multiple-choice question or drop a screenshot. The reply leads with the option letter and a short reason. The editor is not changed.'
+                  ? 'Paste any MCQ or attach screenshots (solution-based math/reasoning/code trace or fact-based core CS/English). Returns the Final Answer, step-by-step Solution/Working, and Explanation of why it is right without editing code.'
                   : 'Paste a problem statement or attach screenshots. Algorithms default to C++17 (main.cpp); SQL, Python, Bash, Docker, YAML, and JS problems automatically open in a dedicated tab with syntax & logic verification.'}
             </p>
           </li>
         ) : (
-          messages.map((message) => {
-            const kind: AgentKind | 'note' = message.kind || (message.role === 'user' ? 'user' : 'note');
-            const label = message.role === 'user' ? 'You' : kind === 'step' ? 'Status' : 'Agent';
-            return (
-              <li key={message.id} className={`ide-msg ide-msg-${message.role} ide-msg-${kind}`}>
-                {kind === 'problem' || kind === 'plan' ? null : <span className="ide-msg-role">{label}</span>}
-                {body(message)}
-              </li>
-            );
-          })
+          leadingMessages.map(renderMessage)
         )}
-        {hasTelemetry ? (
-          <li className="ide-msg ide-msg-assistant ide-msg-thoughts">
-            <details
-              className="ide-think"
-              open={thinkOpen}
-              onToggle={(event) => {
-                const next = event.currentTarget.open;
-                setThinkOpen(next);
-                thinkClosed.current = working && !next;
-              }}
-            >
-              <summary className="ide-think-summary">
-                <span className="ide-think-title">
-                  {working
-                    ? activeThought?.status === 'drafting'
-                      ? 'Drafting'
-                      : 'Thinking'
-                    : 'Thoughts'}
-                  {displayedLabel ? ` · ${displayedLabel}` : ''}
-                </span>
-                <span className="ide-think-meta" onClick={(e) => e.stopPropagation()}>
-                  {thoughtLog.length > 1 ? (
-                    <span className="ide-think-stat">{thoughtLog.length} stages</span>
-                  ) : null}
-                  {displayedThinking ? (
-                    <span className="ide-think-stat">{formatCharCount(displayedThinking.length)}</span>
-                  ) : null}
-                  {working ? (
-                    <button
-                      type="button"
-                      className={`ide-think-btn${autoFollow ? ' active' : ''}`}
-                      title="Auto-scroll latest thoughts"
-                      onClick={() => setAutoFollow((prev) => !prev)}
-                    >
-                      {autoFollow ? 'Follow' : 'Paused'}
-                    </button>
-                  ) : null}
-                  {displayedThinking ? (
-                    <button
-                      type="button"
-                      className="ide-think-btn"
-                      title="Copy reasoning trace"
-                      onClick={copyThoughtText}
-                    >
-                      {copiedThoughts ? 'Copied' : 'Copy'}
-                    </button>
-                  ) : null}
-                </span>
-              </summary>
-              {thoughtLog.length > 0 ? (
-                <div className="ide-think-stages" role="tablist" aria-label="LLM reasoning stages">
-                  {thoughtLog.map((item, idx) => {
-                    const isSelected = activeThought ? activeThought.id === item.id : idx === thoughtLog.length - 1;
-                    const itemElapsed =
-                      item.status === 'thinking' || item.status === 'drafting'
-                        ? Math.max(item.elapsedMs, liveNow - item.startedAt)
-                        : item.elapsedMs;
-                    return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        role="tab"
-                        aria-selected={isSelected}
-                        className={`ide-think-stage ide-think-stage-${item.status}${isSelected ? ' active' : ''}`}
-                        onClick={() => {
-                          setSelectedThoughtId(item.id);
-                          if (item.id !== latestThought?.id) {
-                            setAutoFollow(false);
-                          }
-                        }}
-                      >
-                        <span className={`ide-stage-dot ide-stage-dot-${item.status}`} />
-                        <span>
-                          {idx + 1}. {shortStageLabel(item)}
-                        </span>
-                        <span className="ide-stage-time">{formatDuration(itemElapsed)}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : null}
-              {displayedThinking ? (
-                <div className="ide-think-body">{renderFormattedText(displayedThinking)}</div>
-              ) : working ? (
-                <div className="ide-think-body muted">Waiting for first reasoning tokens from model…</div>
-              ) : null}
-              {displayedDraft ? (
-                <details
-                  className="ide-draft-box"
-                  open={working && (activeThought?.status === 'drafting' || draftChars > 0)}
-                >
-                  <summary className="ide-draft-head">
-                    <span>
-                      {working && activeThought?.status === 'drafting'
-                        ? 'Live Output Stream'
-                        : 'Stage Output Draft'}
-                    </span>
-                    <span>{formatCharCount(displayedDraftChars || displayedDraft.length)}</span>
-                  </summary>
-                  <pre ref={draftRef} className="ide-draft-pre">
-                    {displayedDraft}
-                  </pre>
-                </details>
-              ) : null}
-            </details>
-          </li>
-        ) : null}
+        {telemetryBlock}
+        {trailingAnswer ? renderMessage(trailingAnswer) : null}
         {working ? (
           <li className="ide-agent-live" role="status" aria-live="polite">
             <span className="ide-agent-spinner" aria-hidden="true" />
