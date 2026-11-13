@@ -1143,3 +1143,120 @@ test('needs_human names the failing case and keeps that reason after reload', as
   assert.match(restored.activity, /actual "0\\n"/);
 });
 
+test('mcq persists every question, all screenshots, and solution into solved_history without clobbering active agent state', async () => {
+  const history = createHistoryStore({ dbPath: ':memory:' });
+  const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x01]).toString('base64');
+  const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d]).toString('base64');
+  const webpBytes = Buffer.concat([Buffer.from('RIFF\x00\x00\x00\x00WEBP'), Buffer.from([0x56, 0x50])]).toString('base64');
+
+  const agent = createAgentControl({
+    apiKey: KEY,
+    onSaveHistory: (record) => history.save(record),
+    generate: async (task) => {
+      if (task === 'identify') {
+        return {
+          title: 'Active C++ Problem',
+          problemType: 'cpp',
+          fileName: 'main.cpp',
+          statement: 'Print 42.',
+          casesFromProblem: true,
+          cases: [{ input: '1\n', expected: '42\n' }],
+          plan: 'Print 42.',
+          functionName: 'solve',
+          signature: 'void solve()',
+          format: 'single integer',
+        };
+      }
+      if (task === 'review') return { ok: true, reason: '' };
+      if (task === 'solve') {
+        return {
+          source: '#include <bits/stdc++.h>\nusing namespace std;\nvoid solve(){ cout << 42 << "\\n"; }\nint main(){ solve(); return 0; }\n',
+          approach: 'Print 42.',
+        };
+      }
+      return {
+        title: 'Water Filter Impurity Reduction',
+        question: 'Determine percentage of combined impurity reduction from Orion Filter.',
+        answers: [
+          {
+            number: 1,
+            question: 'What percentage of combined impurity reduction came from Orion Filter? (A) 55.6% (B) 60.5% (C) 62.0% (D) 57.9%',
+            choice: 'D',
+            option: '57.9%',
+            reason: `Orion reduction = 22, Vega reduction = 16, total = 38, so 22/38 = 57.9%. ${KEY}`,
+          },
+          {
+            number: 2,
+            question: 'Which option explains Brand X sales?',
+            choice: 'Option 1',
+            option: 'Over-the-counter availability',
+            reason: 'Provides an alternative explanation.',
+          },
+        ],
+        note: '',
+      };
+    },
+    run: async () => passRun(),
+  });
+
+  // Solve a C++ problem first so state has an active coding problem
+  const cppView = await agent.begin({ text: 'Print 42' });
+  assert.equal(cppView.phase, 'solved');
+
+  // Now run two MCQs with multiple screenshots (including image/jpg + data URI prefix)
+  const firstMcq = await agent.mcq({
+    text: '',
+    images: [
+      { mime: 'image/jpg', data: `data:image/jpeg;base64,${jpegBytes}` },
+      { mime: 'image/png', data: pngBytes },
+      { mime: 'image/webp', data: webpBytes },
+    ],
+  });
+  assert.equal(firstMcq.text.includes(KEY), false);
+  assert.match(firstMcq.text, /1\. D — 57\.9%/);
+  assert.match(firstMcq.text, /2\. Option 1 — Over-the-counter availability/);
+
+  const secondMcq = await agent.mcq({
+    text: 'Weighted average of 2@$10 and 3@$25?',
+    images: [{ mime: 'image/png', data: pngBytes }],
+  });
+  assert.ok(secondMcq.id);
+  assert.notEqual(secondMcq.id, firstMcq.id);
+
+  // Active C++ agent state was not clobbered by MCQ calls
+  assert.equal(agent.snapshot().problemType, 'cpp');
+  assert.match(agent.snapshot().source, /42/);
+
+  // History lists both MCQs under type=mcq and all screenshots are stored & retrieved
+  const mcqList = history.list({ type: 'mcq' });
+  assert.equal(mcqList.total, 2);
+  assert.equal(mcqList.items[0].problemType, 'mcq');
+  const firstSummary = mcqList.items.find((item) => item.id === firstMcq.id);
+  const secondSummary = mcqList.items.find((item) => item.id === secondMcq.id);
+  assert.ok(firstSummary);
+  assert.ok(secondSummary);
+  assert.equal(firstSummary.imageCount, 3);
+  assert.equal(secondSummary.imageCount, 1);
+
+  const detail = history.get(firstMcq.id);
+  assert.ok(detail);
+  assert.equal(detail.problemType, 'mcq');
+  assert.equal(detail.fileName, 'mcq.md');
+  assert.equal(detail.images.length, 3);
+  assert.equal(detail.images[0].mime, 'image/jpeg');
+  assert.equal(detail.images[1].mime, 'image/png');
+  assert.equal(detail.images[2].mime, 'image/webp');
+  assert.equal(detail.cases.length, 2);
+  assert.match(detail.source, /57\.9%/);
+  assert.equal(JSON.stringify(detail).includes(KEY), false);
+
+  // Restoring MCQ history item preserves mcq problemType and entry
+  const restored = agent.loadHistoryItem(detail);
+  assert.equal(restored.problemType, 'mcq');
+  assert.equal(restored.entry, 'mcq');
+  assert.equal(restored.fileName, 'mcq.md');
+
+  history.close();
+});
+
+

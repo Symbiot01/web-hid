@@ -1,4 +1,4 @@
-export type ProblemType = 'cpp' | 'python' | 'sql' | 'bash' | 'dockerfile' | 'yaml' | 'javascript';
+export type ProblemType = 'cpp' | 'python' | 'sql' | 'bash' | 'dockerfile' | 'yaml' | 'javascript' | 'mcq';
 
 export type EditorTab = {
   id: string;
@@ -89,6 +89,7 @@ export type AgentView = {
 
 export function languageForFile(name: string): string {
   const lower = (name || '').toLowerCase();
+  if (lower === 'mcq.md' || lower === 'mcq.txt') return 'markdown';
   if (lower.endsWith('.py')) return 'python';
   if (lower.endsWith('.sql')) return 'sql';
   if (lower.endsWith('.sh') || lower.endsWith('.bash')) return 'shell';
@@ -100,6 +101,7 @@ export function languageForFile(name: string): string {
 
 export function problemTypeForFile(name: string): ProblemType {
   const lower = (name || '').toLowerCase();
+  if (lower === 'mcq.md' || lower === 'mcq.txt') return 'mcq';
   if (lower.endsWith('.py')) return 'python';
   if (lower.endsWith('.sql')) return 'sql';
   if (lower.endsWith('.sh') || lower.endsWith('.bash')) return 'bash';
@@ -117,6 +119,7 @@ export const PROBLEM_TYPE_LABELS: Record<ProblemType, string> = {
   dockerfile: 'Dockerfile',
   yaml: 'YAML',
   javascript: 'JavaScript',
+  mcq: 'MCQ',
 };
 
 export const INITIAL_MAIN = `#include <bits/stdc++.h>

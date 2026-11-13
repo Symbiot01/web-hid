@@ -350,7 +350,7 @@ export function IdePage({ busy, onLogout }: Props) {
 
   function attachToAgent(file: File, resetFirst: boolean) {
     if (resetFirst) guide('reset');
-    setMode('agent');
+    setMode((prev) => (prev === 'mcq' && !resetFirst ? 'mcq' : 'agent'));
     setIncomingFiles((prev) => [...prev, file]);
   }
 
@@ -660,10 +660,13 @@ export function IdePage({ busy, onLogout }: Props) {
                   },
             ),
           });
-          const payload = (await response.json()) as { text?: string; error?: string };
+          const payload = (await response.json().catch(() => ({}))) as { text?: string; error?: string };
+          const replyText = response.ok
+            ? payload.text || payload.error || 'No answer.'
+            : payload.error || `Request failed (${response.status})`;
           setMessages((prev) => [
             ...prev,
-            { id: nextId('msg'), role: 'assistant', text: payload.text || payload.error || 'No answer.' },
+            { id: nextId('msg'), role: 'assistant', text: replyText },
           ]);
         } finally {
           askPending.current = false;

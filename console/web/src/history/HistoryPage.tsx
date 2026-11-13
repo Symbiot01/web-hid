@@ -69,6 +69,7 @@ type HistoryDetail = {
 
 const TYPE_FILTERS: Array<{ key: string; label: string }> = [
   { key: 'all', label: 'All' },
+  { key: 'mcq', label: 'MCQ' },
   { key: 'cpp', label: 'C++17' },
   { key: 'python', label: 'Python' },
   { key: 'sql', label: 'SQL' },
@@ -77,6 +78,17 @@ const TYPE_FILTERS: Array<{ key: string; label: string }> = [
   { key: 'yaml', label: 'YAML' },
   { key: 'javascript', label: 'JS' },
 ];
+
+const SAFE_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+function safeImageSrc(img: HistoryImage | undefined | null): string | null {
+  if (!img || typeof img.mime !== 'string' || typeof img.data !== 'string') return null;
+  const mime = img.mime.trim().toLowerCase() === 'image/jpg' ? 'image/jpeg' : img.mime.trim().toLowerCase();
+  if (!SAFE_IMAGE_MIMES.has(mime)) return null;
+  const cleanData = img.data.replace(/\s+/g, '');
+  if (!cleanData || !/^[A-Za-z0-9+/]+={0,2}$/.test(cleanData)) return null;
+  return `data:${mime};base64,${cleanData}`;
+}
 
 type DetailTab = 'overview' | 'images' | 'code' | 'chat' | 'cases';
 
@@ -342,10 +354,12 @@ export function HistoryPage() {
                       </div>
                       <p className="hist-item-preview">{item.statementPreview}</p>
                       <div className="hist-item-meta">
-                        <code>{item.fileName}</code>
+                        <code>{item.problemType === 'mcq' ? 'MCQ' : item.fileName}</code>
                         <span>·</span>
                         <span>
-                          {item.passCount}/{item.caseCount} pass
+                          {item.problemType === 'mcq'
+                            ? `${item.caseCount || (item.phase === 'solved' ? 1 : 0)} ans`
+                            : `${item.passCount}/${item.caseCount} pass`}
                         </span>
                         {item.imageCount && item.imageCount > 0 ? (
                           <>
@@ -393,7 +407,9 @@ export function HistoryPage() {
                     </span>
                     {detail.signature ? <code className="ide-meta-chip">{detail.signature}</code> : null}
                     <span className="ide-meta-chip">
-                      {detail.passCount}/{detail.caseCount} cases passed
+                      {detail.problemType === 'mcq'
+                        ? `${detail.caseCount || (detail.phase === 'solved' ? 1 : 0)} answered`
+                        : `${detail.passCount}/${detail.caseCount} cases passed`}
                     </span>
                     {detail.images && detail.images.length > 0 ? (
                       <span className="ide-meta-chip">
@@ -411,7 +427,7 @@ export function HistoryPage() {
                     className="btn ghost ide-mini"
                     onClick={handleCopyCode}
                   >
-                    {copiedCode ? 'Copied!' : 'Copy Code'}
+                    {copiedCode ? 'Copied!' : detail.problemType === 'mcq' ? 'Copy Solution' : 'Copy Code'}
                   </button>
                   <button
                     type="button"
@@ -459,7 +475,7 @@ export function HistoryPage() {
                   className={`ide-tab${activeTab === 'code' ? ' active' : ''}`}
                   onClick={() => setActiveTab('code')}
                 >
-                  Code ({detail.fileName})
+                  {detail.problemType === 'mcq' ? `Solution (${detail.fileName})` : `Code (${detail.fileName})`}
                 </button>
                 <button
                   type="button"
@@ -477,7 +493,9 @@ export function HistoryPage() {
                   className={`ide-tab${activeTab === 'cases' ? ' active' : ''}`}
                   onClick={() => setActiveTab('cases')}
                 >
-                  Verification Cases ({detail.passCount}/{detail.caseCount})
+                  {detail.problemType === 'mcq'
+                    ? `MCQ Answers (${detail.caseCount})`
+                    : `Verification Cases (${detail.passCount}/${detail.caseCount})`}
                 </button>
               </div>
 
@@ -488,28 +506,66 @@ export function HistoryPage() {
                       <section className="hist-card">
                         <div className="hist-card-head">
                           <h3>Input Question Screenshots ({detail.images.length})</h3>
-                          <span className="muted" style={{ fontSize: '0.75rem' }}>
-                            Click any screenshot to inspect full size
-                          </span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <span className="muted" style={{ fontSize: '0.75rem' }}>
+                              Click any screenshot to inspect full size
+                            </span>
+                            <button
+                              type="button"
+                              className="btn ghost ide-mini"
+                              onClick={() => setActiveTab('images')}
+                            >
+                              View all ({detail.images.length})
+                            </button>
+                          </div>
                         </div>
                         <div className="hist-images-grid">
-                          {detail.images.map((img, idx) => (
-                            <button
-                              key={`thumb-${idx}`}
-                              type="button"
-                              className="hist-image-thumb"
-                              onClick={() => setLightboxIndex(idx)}
-                              title={`Open screenshot #${idx + 1}`}
-                            >
-                              <img
-                                src={`data:${img.mime};base64,${img.data}`}
-                                alt={`Question screenshot ${idx + 1}`}
-                                loading="lazy"
-                              />
-                              <span className="hist-image-label">Part #{idx + 1}</span>
-                            </button>
-                          ))}
+                          {detail.images.map((img, idx) => {
+                            const src = safeImageSrc(img);
+                            if (!src) return null;
+                            return (
+                              <button
+                                key={`thumb-${idx}`}
+                                type="button"
+                                className="hist-image-thumb"
+                                onClick={() => setLightboxIndex(idx)}
+                                title={`Open screenshot #${idx + 1}`}
+                              >
+                                <img
+                                  src={src}
+                                  alt={`Question screenshot ${idx + 1}`}
+                                />
+                                <span className="hist-image-label">Part #{idx + 1}</span>
+                              </button>
+                            );
+                          })}
                         </div>
+                      </section>
+                    ) : null}
+                    {detail.problemType === 'mcq' ? (
+                      <section className="hist-card">
+                        <h3>Correct MCQ Solution</h3>
+                        {detail.cases.length > 0 ? (
+                          <div className="hist-mcq-list">
+                            {detail.cases.map((c, idx) => (
+                              <div key={`mcq-ans-${idx}`} className="hist-mcq-item">
+                                <div className="hist-mcq-item-head">
+                                  <span className="hist-badge hist-badge-ok">
+                                    Answer #{idx + 1}: {c.expected || 'Answered'}
+                                  </span>
+                                </div>
+                                {c.input ? (
+                                  <p className="hist-mcq-q">{c.input}</p>
+                                ) : null}
+                                {c.stderr ? (
+                                  <pre className="hist-pre">{c.stderr}</pre>
+                                ) : null}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <pre className="hist-pre">{detail.source || detail.output || 'No solution recorded.'}</pre>
+                        )}
                       </section>
                     ) : null}
                     <section className="hist-card">
@@ -519,62 +575,68 @@ export function HistoryPage() {
                           <strong>Format:</strong> {detail.format}
                         </p>
                       ) : null}
-                      <pre className="hist-pre">{detail.statement}</pre>
+                      <pre className="hist-pre">{detail.statement || '(No text statement extracted)'}</pre>
                     </section>
                     {detail.approach ? (
                       <section className="hist-card">
-                        <h3>Algorithm / Strategy &amp; Complexity</h3>
+                        <h3>{detail.problemType === 'mcq' ? 'Answer Summary & Reasoning' : 'Algorithm / Strategy & Complexity'}</h3>
                         <pre className="hist-pre">{detail.approach}</pre>
                       </section>
                     ) : null}
-                    <section className="hist-card" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                      <h3>Solution ({detail.fileName})</h3>
-                      <div className="hist-editor-wrap">
-                        <Editor
-                          height="420px"
-                          language={languageForFile(detail.fileName)}
-                          theme="vs-dark"
-                          value={detail.source}
-                          options={{
-                            readOnly: true,
-                            minimap: { enabled: false },
-                            fontSize: 13,
-                            scrollBeyondLastLine: false,
-                            automaticLayout: true,
-                            padding: { top: 8 },
-                          }}
-                        />
-                      </div>
-                    </section>
+                    {detail.problemType !== 'mcq' ? (
+                      <section className="hist-card" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                        <h3>Solution ({detail.fileName})</h3>
+                        <div className="hist-editor-wrap">
+                          <Editor
+                            height="420px"
+                            language={languageForFile(detail.fileName)}
+                            theme="vs-dark"
+                            value={detail.source}
+                            options={{
+                              readOnly: true,
+                              minimap: { enabled: false },
+                              fontSize: 13,
+                              scrollBeyondLastLine: false,
+                              automaticLayout: true,
+                              padding: { top: 8 },
+                            }}
+                          />
+                        </div>
+                      </section>
+                    ) : null}
                   </>
                 ) : null}
 
                 {activeTab === 'images' && detail.images && detail.images.length > 0 ? (
                   <div className="hist-images-stack">
-                    {detail.images.map((img, idx) => (
-                      <section key={`full-img-${idx}`} className="hist-card">
-                        <div className="hist-card-head">
-                          <h3>
-                            Screenshot #{idx + 1} of {detail.images?.length}
-                          </h3>
-                          <button
-                            type="button"
-                            className="btn ghost ide-mini"
-                            onClick={() => setLightboxIndex(idx)}
-                          >
-                            Fullscreen
-                          </button>
-                        </div>
-                        <div className="hist-image-full-wrap">
-                          <img
-                            src={`data:${img.mime};base64,${img.data}`}
-                            alt={`Question screenshot ${idx + 1}`}
-                            className="hist-image-full"
-                            onClick={() => setLightboxIndex(idx)}
-                          />
-                        </div>
-                      </section>
-                    ))}
+                    {detail.images.map((img, idx) => {
+                      const src = safeImageSrc(img);
+                      if (!src) return null;
+                      return (
+                        <section key={`full-img-${idx}`} className="hist-card">
+                          <div className="hist-card-head">
+                            <h3>
+                              Screenshot #{idx + 1} of {detail.images?.length}
+                            </h3>
+                            <button
+                              type="button"
+                              className="btn ghost ide-mini"
+                              onClick={() => setLightboxIndex(idx)}
+                            >
+                              Fullscreen
+                            </button>
+                          </div>
+                          <div className="hist-image-full-wrap">
+                            <img
+                              src={src}
+                              alt={`Question screenshot ${idx + 1}`}
+                              className="hist-image-full"
+                              onClick={() => setLightboxIndex(idx)}
+                            />
+                          </div>
+                        </section>
+                      );
+                    })}
                   </div>
                 ) : null}
 
@@ -623,21 +685,25 @@ export function HistoryPage() {
                       {detail.cases.map((c, idx) => (
                         <div key={`case-${idx}`} className="hist-case-card">
                           <div className="hist-case-head">
-                            <span>Case #{idx + 1}</span>
+                            <span>{detail.problemType === 'mcq' ? `Question #${idx + 1}` : `Case #${idx + 1}`}</span>
                             <span className={`hist-badge${c.status === 'pass' ? ' hist-badge-ok' : ' hist-badge-warn'}`}>
-                              {c.status}
+                              {detail.problemType === 'mcq' ? 'answered' : c.status}
                               {c.timeMs ? ` · ${c.timeMs}ms` : ''}
                             </span>
                           </div>
                           <div>
-                            <span className="muted" style={{ fontSize: '0.72rem' }}>Input / Scenario</span>
+                            <span className="muted" style={{ fontSize: '0.72rem' }}>
+                              {detail.problemType === 'mcq' ? 'Question' : 'Input / Scenario'}
+                            </span>
                             <pre className="hist-pre">{c.input || '(empty)'}</pre>
                           </div>
                           <div>
-                            <span className="muted" style={{ fontSize: '0.72rem' }}>Expected</span>
+                            <span className="muted" style={{ fontSize: '0.72rem' }}>
+                              {detail.problemType === 'mcq' ? 'Selected Answer' : 'Expected'}
+                            </span>
                             <pre className="hist-pre">{c.expected || '(empty)'}</pre>
                           </div>
-                          {c.actual ? (
+                          {c.actual && detail.problemType !== 'mcq' ? (
                             <div>
                               <span className="muted" style={{ fontSize: '0.72rem' }}>Actual / Verified</span>
                               <pre className="hist-pre">{c.actual}</pre>
@@ -645,7 +711,9 @@ export function HistoryPage() {
                           ) : null}
                           {c.stderr ? (
                             <div>
-                              <span className="muted" style={{ fontSize: '0.72rem' }}>Notes / Stderr</span>
+                              <span className="muted" style={{ fontSize: '0.72rem' }}>
+                                {detail.problemType === 'mcq' ? 'Explanation' : 'Notes / Stderr'}
+                              </span>
                               <pre className="hist-pre">{c.stderr}</pre>
                             </div>
                           ) : null}
@@ -654,7 +722,7 @@ export function HistoryPage() {
                     </div>
                     {detail.output ? (
                       <section className="hist-card">
-                        <h3>Compiler / Checker Output</h3>
+                        <h3>{detail.problemType === 'mcq' ? 'Full MCQ Reply' : 'Compiler / Checker Output'}</h3>
                         <pre className="hist-pre">{detail.output}</pre>
                       </section>
                     ) : null}
@@ -713,14 +781,16 @@ export function HistoryPage() {
                   </button>
                 </>
               ) : null}
-              <a
-                href={`data:${detail.images[lightboxIndex].mime};base64,${detail.images[lightboxIndex].data}`}
-                download={`${detail.title ? detail.title.replace(/[^a-zA-Z0-9_-]+/g, '-') : 'question'}-part-${lightboxIndex + 1}.${detail.images[lightboxIndex].mime === 'image/png' ? 'png' : detail.images[lightboxIndex].mime === 'image/webp' ? 'webp' : 'jpg'}`}
-                className="btn ghost ide-mini"
-                style={{ textDecoration: 'none' }}
-              >
-                Download
-              </a>
+              {safeImageSrc(detail.images[lightboxIndex]) ? (
+                <a
+                  href={safeImageSrc(detail.images[lightboxIndex]) || undefined}
+                  download={`${detail.title ? detail.title.replace(/[^a-zA-Z0-9_-]+/g, '-') : 'question'}-part-${lightboxIndex + 1}.${detail.images[lightboxIndex].mime === 'image/png' ? 'png' : detail.images[lightboxIndex].mime === 'image/webp' ? 'webp' : 'jpg'}`}
+                  className="btn ghost ide-mini"
+                  style={{ textDecoration: 'none' }}
+                >
+                  Download
+                </a>
+              ) : null}
               <button
                 type="button"
                 className="btn primary ide-mini"
@@ -731,11 +801,13 @@ export function HistoryPage() {
             </div>
           </div>
           <div className="hist-lightbox-body" onClick={(e) => e.stopPropagation()}>
-            <img
-              src={`data:${detail.images[lightboxIndex].mime};base64,${detail.images[lightboxIndex].data}`}
-              alt={`Question screenshot ${lightboxIndex + 1}`}
-              className="hist-lightbox-img"
-            />
+            {safeImageSrc(detail.images[lightboxIndex]) ? (
+              <img
+                src={safeImageSrc(detail.images[lightboxIndex]) || undefined}
+                alt={`Question screenshot ${lightboxIndex + 1}`}
+                className="hist-lightbox-img"
+              />
+            ) : null}
           </div>
         </div>
       ) : null}

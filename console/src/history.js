@@ -65,20 +65,45 @@ function sanitizeCases(cases) {
   }));
 }
 
-function isValidImageItem(image) {
-  if (!image || typeof image !== 'object' || typeof image.data !== 'string' || !IMAGE_TYPES.has(image.mime)) {
-    return false;
+function normalizeImageMime(rawMime) {
+  if (typeof rawMime !== 'string') return '';
+  const lower = rawMime.trim().toLowerCase();
+  if (lower === 'image/jpg') return 'image/jpeg';
+  return IMAGE_TYPES.has(lower) ? lower : '';
+}
+
+function normalizeImageItem(image) {
+  if (!image || typeof image !== 'object' || typeof image.data !== 'string') {
+    return null;
+  }
+  let mime = normalizeImageMime(image.mime);
+  let rawData = image.data.trim();
+  const dataUriMatch = /^data:(image\/[a-z0-9.+-]+);base64,([\s\S]+)$/i.exec(rawData);
+  if (dataUriMatch) {
+    const uriMime = normalizeImageMime(dataUriMatch[1]);
+    if (!uriMime) return null;
+    if (!mime) mime = uriMime;
+    else if (mime !== uriMime) return null;
+    rawData = dataUriMatch[2];
+  }
+  if (!mime) return null;
+  const cleanData = rawData.replace(/\s+/g, '');
+  if (!cleanData || !/^[A-Za-z0-9+/]+={0,2}$/.test(cleanData)) {
+    return null;
   }
   let bytes;
   try {
-    bytes = Buffer.from(image.data, 'base64');
+    bytes = Buffer.from(cleanData, 'base64');
   } catch {
-    return false;
+    return null;
   }
-  if (bytes.length === 0 || bytes.length > MAX_IMAGE_BYTES) return false;
-  if (image.mime === 'image/jpeg') return bytes[0] === 0xff && bytes[1] === 0xd8;
-  if (image.mime === 'image/png') return bytes[0] === 0x89 && bytes[1] === 0x50;
-  return bytes.slice(0, 4).toString('ascii') === 'RIFF' && bytes.slice(8, 12).toString('ascii') === 'WEBP';
+  if (bytes.length === 0 || bytes.length > MAX_IMAGE_BYTES) return null;
+  const validMagic =
+    (mime === 'image/jpeg' && bytes[0] === 0xff && bytes[1] === 0xd8) ||
+    (mime === 'image/png' && bytes[0] === 0x89 && bytes[1] === 0x50) ||
+    (mime === 'image/webp' && bytes.slice(0, 4).toString('ascii') === 'RIFF' && bytes.slice(8, 12).toString('ascii') === 'WEBP');
+  if (!validMagic) return null;
+  return { mime, data: cleanData };
 }
 
 function sanitizeImages(images) {
@@ -86,8 +111,9 @@ function sanitizeImages(images) {
   const valid = [];
   for (const item of images) {
     if (valid.length >= MAX_IMAGES) break;
-    if (isValidImageItem(item)) {
-      valid.push({ mime: item.mime, data: item.data });
+    const normalized = normalizeImageItem(item);
+    if (normalized) {
+      valid.push(normalized);
     }
   }
   return valid;
@@ -265,7 +291,7 @@ function createJsonHistoryStore(filePath) {
       .filter((row) => {
         if (cleanType && row.problem_type !== cleanType) return false;
         if (cleanQ) {
-          const hay = `${row.title}\n${row.statement}\n${row.approach}\n${row.file_name}`.toLowerCase();
+          const hay = `${row.title}\n${row.statement}\n${row.approach}\n${row.source}\n${row.file_name}`.toLowerCase();
           if (!hay.includes(cleanQ)) return false;
         }
         return true;
@@ -436,8 +462,8 @@ function createHistoryStore({ dbPath }) {
     }
     if (cleanQ) {
       const pattern = `%${escapeLike(cleanQ)}%`;
-      where.push("(title LIKE ? ESCAPE '\\' OR statement LIKE ? ESCAPE '\\' OR approach LIKE ? ESCAPE '\\' OR file_name LIKE ? ESCAPE '\\')");
-      params.push(pattern, pattern, pattern, pattern);
+      where.push("(title LIKE ? ESCAPE '\\' OR statement LIKE ? ESCAPE '\\' OR approach LIKE ? ESCAPE '\\' OR source LIKE ? ESCAPE '\\' OR file_name LIKE ? ESCAPE '\\')");
+      params.push(pattern, pattern, pattern, pattern, pattern);
     }
 
     const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
@@ -446,10 +472,12 @@ function createHistoryStore({ dbPath }) {
       .get(...params);
     const rows = db
       .prepare(
-        `SELECT id, title, problem_type, file_name, entry, signature, format, phase, statement, approach, cases_json, messages_json, json_array_length(COALESCE(images_json, '[]')) AS image_count, created_at, updated_at
+        `SELECT id, title, problem_type, file_name, entry, signature, format, phase, statement, approach, cases_json, messages_json,
+                CASE WHEN json_valid(images_json) THEN json_array_length(images_json) ELSE 0 END AS image_count,
+                created_at, updated_at
          FROM solved_history
          ${whereClause}
-         ORDER BY updated_at DESC
+         ORDER BY updated_at DESC, rowid DESC
          LIMIT ? OFFSET ?`,
       )
       .all(...params, safeLimit, safeOffset);

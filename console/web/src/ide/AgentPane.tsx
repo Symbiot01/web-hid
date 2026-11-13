@@ -24,7 +24,7 @@ type ImageItem = ImagePayload & { id: string; name: string };
 
 const MAX_IMAGES = 15;
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
-const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
 
 type Props = {
   mode: AgentMode;
@@ -381,7 +381,8 @@ export function AgentPane({
       onMode('agent');
     }
     for (const file of valid) {
-      const ext = file.type === 'image/jpeg' ? 'jpg' : file.type === 'image/webp' ? 'webp' : 'png';
+      const mime = file.type === 'image/jpg' ? 'image/jpeg' : file.type;
+      const ext = mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : 'png';
       imgCounter.current += 1;
       const seq = imgCounter.current;
       const label =
@@ -395,7 +396,7 @@ export function AgentPane({
             setImageNotice(`Maximum ${MAX_IMAGES} images per problem`);
             return prev;
           }
-          return [...prev, { id: `img-${seq}-${Date.now()}`, name: label, mime: file.type, base64 }];
+          return [...prev, { id: `img-${seq}-${Date.now()}`, name: label, mime, base64 }];
         });
       };
       reader.readAsDataURL(file);

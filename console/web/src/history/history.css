@@ -436,6 +436,37 @@
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
 }
 
+.hist-mcq-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.hist-mcq-item {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.hist-mcq-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.hist-mcq-q {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.45;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
 @media (max-width: 900px) {
   .hist-layout {
     grid-template-columns: 1fr;

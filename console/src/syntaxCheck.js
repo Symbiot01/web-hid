@@ -12,7 +12,7 @@ const CHECK_FSIZE = 1024 * 1024;
 const OUTPUT_MAX = 8 * 1024;
 const HAS_LIB64 = fsSync.existsSync('/lib64');
 
-const VALID_TYPES = new Set(['cpp', 'python', 'sql', 'bash', 'dockerfile', 'yaml', 'javascript']);
+const VALID_TYPES = new Set(['cpp', 'python', 'sql', 'bash', 'dockerfile', 'yaml', 'javascript', 'mcq']);
 
 const DEFAULT_FILES = {
   cpp: 'main.cpp',
@@ -22,6 +22,7 @@ const DEFAULT_FILES = {
   dockerfile: 'Dockerfile',
   yaml: 'config.yaml',
   javascript: 'solution.js',
+  mcq: 'mcq.md',
 };
 
 function normalizeProblemType(rawType, rawFileName) {
@@ -34,6 +35,7 @@ function normalizeProblemType(rawType, rawFileName) {
   if (type === 'docker' || type === 'container') return 'dockerfile';
   if (type === 'yml') return 'yaml';
   if (type === 'js' || type === 'node' || type === 'typescript' || type === 'ts') return 'javascript';
+  if (type === 'multiple-choice' || type === 'multiple_choice' || type === 'quiz') return 'mcq';
 
   const file = typeof rawFileName === 'string' ? rawFileName.trim().toLowerCase() : '';
   if (file.endsWith('.py')) return 'python';
@@ -42,6 +44,7 @@ function normalizeProblemType(rawType, rawFileName) {
   if (file === 'dockerfile' || file.startsWith('dockerfile.')) return 'dockerfile';
   if (file.endsWith('.yaml') || file.endsWith('.yml')) return 'yaml';
   if (file.endsWith('.js') || file.endsWith('.mjs')) return 'javascript';
+  if (file === 'mcq.md' || file === 'mcq.txt') return 'mcq';
   return 'cpp';
 }
 
@@ -493,6 +496,10 @@ async function checkSyntax(problemType, source) {
 
   if (type === 'javascript') {
     return checkJavaScriptSyntax(source);
+  }
+
+  if (type === 'mcq') {
+    return { ok: true, stderr: '' };
   }
 
   return { ok: true, stderr: '' };
