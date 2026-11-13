@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { isTypingCode, keyFrame, mouseFrame } from './hidKeys.ts';
+import type { SnapTarget } from './types.ts';
 import type { LiveMode } from './useHidLink.ts';
 import { startWhep, type WhepSession } from './whep.ts';
 
@@ -18,6 +19,7 @@ type Props = {
   suspended: boolean;
   onLive: (mode: LiveMode) => void;
   onLeaveLive: () => void;
+  onSnap: (kind: 'frame' | 'agent', target?: SnapTarget, resetFirst?: boolean) => Promise<string>;
   sendFrame: (buf: ArrayBuffer | null) => boolean;
   onBindVideoGrabber: (fn: (() => Promise<Blob | null>) | null) => void;
 };
@@ -51,6 +53,7 @@ export function StreamPane({
   suspended,
   onLive,
   onLeaveLive,
+  onSnap,
   sendFrame,
   onBindVideoGrabber,
 }: Props) {
@@ -365,6 +368,28 @@ export function StreamPane({
           <span className="ide-stream-dot" aria-hidden="true" />
           {detail}
         </span>
+        <div
+          className="ide-stream-snap-actions"
+          role="group"
+          aria-label="Snap stream frame to MCQ or Agent"
+        >
+          <button
+            type="button"
+            className="btn ghost ide-mini"
+            onClick={() => void onSnap('frame', 'mcq')}
+            title="Grab frame from live stream and attach to MCQ"
+          >
+            + Snap Frame → MCQ
+          </button>
+          <button
+            type="button"
+            className="btn ghost ide-mini"
+            onClick={() => void onSnap('frame', 'agent')}
+            title="Grab frame from live stream and attach to Agent"
+          >
+            + Snap Frame → Agent
+          </button>
+        </div>
         <div
           className="ide-stream-source-switch"
           role="group"

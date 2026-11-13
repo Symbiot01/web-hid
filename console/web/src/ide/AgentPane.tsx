@@ -15,6 +15,7 @@ import {
   type AgentPhase,
   type AgentStep,
   type AgentThoughtEntry,
+  type IncomingAgentFile,
   type ProblemType,
   type TestCase,
 } from './types.ts';
@@ -49,7 +50,7 @@ type Props = {
   cases: TestCase[];
   configured: boolean;
   messages: AgentMessage[];
-  incomingFiles?: File[];
+  incomingFiles?: IncomingAgentFile[];
   onClearIncoming?: () => void;
   onMode: (mode: AgentMode) => void;
   onSend: (text: string, images: ImagePayload[]) => void;
@@ -319,7 +320,12 @@ export function AgentPane({
 
   useEffect(() => {
     if (!incomingFiles || incomingFiles.length === 0) return;
-    addFiles(incomingFiles, 'capture');
+    const targetMode = incomingFiles[incomingFiles.length - 1]?.targetMode;
+    addFiles(
+      incomingFiles.map((item) => item.file),
+      'capture',
+      targetMode,
+    );
     onClearIncoming?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [incomingFiles]);
@@ -359,7 +365,11 @@ export function AgentPane({
     });
   }
 
-  function addFiles(fileList: File[] | FileList | null | undefined, prefix = 'part') {
+  function addFiles(
+    fileList: File[] | FileList | null | undefined,
+    prefix = 'part',
+    targetMode?: 'agent' | 'mcq',
+  ) {
     if (!fileList || fileList.length === 0) return;
     const incoming = Array.from(fileList);
     const valid: File[] = [];
@@ -377,7 +387,9 @@ export function AgentPane({
       setImageNotice('');
     }
     if (valid.length === 0) return;
-    if (mode === 'ask') {
+    if (targetMode) {
+      onMode(targetMode);
+    } else if (mode === 'ask') {
       onMode('agent');
     }
     for (const file of valid) {
@@ -518,33 +530,50 @@ export function AgentPane({
       onDrop={handleDrop}
     >
       <header className="ide-bar">
-        <div className="ide-modes" role="radiogroup" aria-label="Agent mode">
+        <div className="ide-bar-left">
+          <div className="ide-modes" role="radiogroup" aria-label="Agent mode">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={mode === 'ask'}
+              className={`ide-tab${mode === 'ask' ? ' active' : ''}`}
+              onClick={() => onMode('ask')}
+            >
+              Ask
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={mode === 'mcq'}
+              className={`ide-tab${mode === 'mcq' ? ' active' : ''}`}
+              onClick={() => onMode('mcq')}
+            >
+              MCQ
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={mode === 'agent'}
+              className={`ide-tab${mode === 'agent' ? ' active' : ''}`}
+              onClick={() => onMode('agent')}
+            >
+              Agent
+            </button>
+          </div>
           <button
             type="button"
-            role="radio"
-            aria-checked={mode === 'ask'}
-            className={`ide-tab${mode === 'ask' ? ' active' : ''}`}
-            onClick={() => onMode('ask')}
+            className="btn ghost ide-mini ide-new-problem-btn"
+            disabled={working}
+            title={working ? 'Stop the current run before starting a new problem' : 'Start a new problem and clear current messages/attachments'}
+            onClick={() => {
+              setDraft('');
+              setImages([]);
+              setImageNotice('');
+              if (fileRef.current) fileRef.current.value = '';
+              onAction('reset');
+            }}
           >
-            Ask
-          </button>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={mode === 'mcq'}
-            className={`ide-tab${mode === 'mcq' ? ' active' : ''}`}
-            onClick={() => onMode('mcq')}
-          >
-            MCQ
-          </button>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={mode === 'agent'}
-            className={`ide-tab${mode === 'agent' ? ' active' : ''}`}
-            onClick={() => onMode('agent')}
-          >
-            Agent
+            + New problem
           </button>
         </div>
         <div className="ide-bar-actions">
@@ -561,11 +590,6 @@ export function AgentPane({
               onClick={() => onAction('cancel')}
             >
               Stop
-            </button>
-          ) : null}
-          {mode === 'agent' && phase !== 'idle' && !working ? (
-            <button type="button" className="btn ghost ide-mini" onClick={() => onAction('reset')}>
-              New problem
             </button>
           ) : null}
           <span

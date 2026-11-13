@@ -2,7 +2,7 @@ import { CameraPanel } from './CameraPanel.tsx';
 import { HidPane } from './HidPane.tsx';
 import { TestsPane } from './TestsPane.tsx';
 import type { HidPlay } from './hidPayload.ts';
-import type { TestCase } from './types.ts';
+import type { SnapTarget, TestCase } from './types.ts';
 import type { LiveMode } from './useHidLink.ts';
 
 export type BottomTab = 'cases' | 'terminal' | 'camera' | 'hid';
@@ -32,7 +32,7 @@ type Props = {
   onOpenStream: () => void;
   onStopStream: () => Promise<string>;
   streamStopped: boolean;
-  onSnap: (kind: 'frame' | 'agent', target?: 'agent' | 'save', resetFirst?: boolean) => Promise<string>;
+  onSnap: (kind: 'frame' | 'agent', target?: SnapTarget, resetFirst?: boolean) => Promise<string>;
   continuous: boolean;
   liveMode: LiveMode | null;
   onContinuous: (enabled: boolean) => void;

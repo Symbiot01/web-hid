@@ -17,7 +17,9 @@ import {
   type AgentThoughtEntry,
   type AgentView,
   type EditorTab,
+  type IncomingAgentFile,
   type ProblemType,
+  type SnapTarget,
   type TestCase,
 } from './types.ts';
 import { useHidLink, type LiveMode } from './useHidLink.ts';
@@ -133,7 +135,7 @@ export function IdePage({ busy, onLogout }: Props) {
   const [liveMode, setLiveMode] = useState<LiveMode | null>(null);
   const [snapNote, setSnapNote] = useState('');
   const [hidPlay, setHidPlay] = useState<HidPlay | null>(null);
-  const [incomingFiles, setIncomingFiles] = useState<File[]>([]);
+  const [incomingFiles, setIncomingFiles] = useState<IncomingAgentFile[]>([]);
   const videoGrabberRef = useRef<(() => Promise<Blob | null>) | null>(null);
   const bindVideoGrabber = useCallback((fn: (() => Promise<Blob | null>) | null) => {
     videoGrabberRef.current = fn;
@@ -348,25 +350,26 @@ export function IdePage({ busy, onLogout }: Props) {
     }
   }
 
-  function attachToAgent(file: File, resetFirst: boolean) {
+  function attachToTarget(file: File, targetMode: 'agent' | 'mcq', resetFirst: boolean) {
     if (resetFirst) guide('reset');
-    setMode((prev) => (prev === 'mcq' && !resetFirst ? 'mcq' : 'agent'));
-    setIncomingFiles((prev) => [...prev, file]);
+    setMode(targetMode);
+    setIncomingFiles((prev) => [...prev, { file, targetMode }]);
   }
 
   async function snap(
     kind: 'frame' | 'agent',
-    target: 'agent' | 'save' = 'agent',
+    target: SnapTarget = 'agent',
     resetFirst = false,
   ): Promise<string> {
+    const targetLabel = target === 'mcq' ? 'MCQ' : 'Agent';
     const startMsg =
       kind === 'frame'
-        ? target === 'agent'
-          ? 'Snapping stream frame to Agent…'
-          : 'Saving stream frame…'
-        : target === 'agent'
-          ? 'Snapping frame to Agent…'
-          : 'Requesting still frame…';
+        ? target === 'save'
+          ? 'Saving stream frame…'
+          : `Snapping stream frame to ${targetLabel}…`
+        : target === 'save'
+          ? 'Requesting still frame…'
+          : `Snapping frame to ${targetLabel}…`;
     setSnapNote(startMsg);
     try {
       let blob: Blob | null = null;
@@ -405,10 +408,10 @@ export function IdePage({ busy, onLogout }: Props) {
         return msg;
       }
       const file = new File([blob], filename, { type: blob.type || 'image/jpeg' });
-      attachToAgent(file, resetFirst);
+      attachToTarget(file, target, resetFirst);
       const msg = resetFirst
-        ? `New problem with ${filename} (${sourceLabel})`
-        : `Attached ${filename} to Agent (${sourceLabel})`;
+        ? `New ${targetLabel} problem with ${filename} (${sourceLabel})`
+        : `Attached ${filename} to ${targetLabel} (${sourceLabel})`;
       setSnapNote(msg);
       return msg;
     } catch {
@@ -733,7 +736,20 @@ export function IdePage({ busy, onLogout }: Props) {
 
   function guide(action: 'retry' | 'cases_wrong' | 'more_cases' | 'reset' | 'cancel') {
     if (action === 'reset' || action === 'cancel') {
-      if (action === 'reset') agentOutput.current = '';
+      if (action === 'reset') {
+        agentOutput.current = '';
+        askPending.current = false;
+        setMessages([]);
+        setAgentActivity('');
+        setAgentThinking('');
+        setAgentThinkingLabel('');
+        setAgentDrafting('');
+        setAgentDraftChars(0);
+        setAgentElapsedMs(0);
+        setAgentThoughtLog([]);
+        setSnapNote('');
+        setIncomingFiles([]);
+      }
       awaitingAgent.current = false;
       void fetch('/api/agent/guide', {
         method: 'POST',

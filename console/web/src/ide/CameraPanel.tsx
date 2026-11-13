@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import type { SnapTarget } from './types.ts';
 
 type Check = { name: string; ok: boolean; detail: string };
 
@@ -87,7 +88,7 @@ type Props = {
   onOpenStream: () => void;
   onStopStream: () => Promise<string>;
   streamStopped: boolean;
-  onSnap: (kind: 'frame' | 'agent', target?: 'agent' | 'save', resetFirst?: boolean) => Promise<string>;
+  onSnap: (kind: 'frame' | 'agent', target?: SnapTarget, resetFirst?: boolean) => Promise<string>;
 };
 
 export function CameraPanel({
@@ -193,12 +194,12 @@ export function CameraPanel({
     );
   };
 
-  async function runSnap(kind: 'frame' | 'agent', target: 'agent' | 'save') {
+  async function runSnap(kind: 'frame' | 'agent', target: SnapTarget) {
     if (capturing) return;
     const key = `${kind}-${target}`;
     setCapturing(key);
     try {
-      const shouldReset = target === 'agent' && resetOnCapture;
+      const shouldReset = target !== 'save' && resetOnCapture;
       const msg = await onSnap(kind, target, shouldReset);
       setOutput(msg);
       if (shouldReset && !msg.toLowerCase().includes('failed')) {
@@ -276,8 +277,8 @@ export function CameraPanel({
 
       <section className="ide-cam-card" aria-label="Snap Frame and Snap Agent">
         <div className="ide-hid-head">
-          <strong className="ide-cam-card-title">Snap & Send to Agent</strong>
-          <label className="ide-check" title="Reset Agent problem before attaching the next frame">
+          <strong className="ide-cam-card-title">Snap &amp; Send to MCQ / Agent</strong>
+          <label className="ide-check" title="Reset current problem before attaching the next frame">
             <input
               type="checkbox"
               checked={resetOnCapture}
@@ -291,17 +292,35 @@ export function CameraPanel({
             type="button"
             className="btn primary ide-mini"
             disabled={capturing !== null}
-            onClick={() => void runSnap('frame', 'agent')}
-            title="Grab still frame from live stream / RTSP and attach directly to Agent pane"
+            onClick={() => void runSnap('frame', 'mcq')}
+            title="Grab still frame from live stream / RTSP and attach directly to MCQ mode"
           >
-            {capturing === 'frame-agent' ? 'Snapping Frame…' : '+ Snap Frame → Agent'}
+            {capturing === 'frame-mcq' ? 'Snapping Frame…' : '+ Snap Frame → MCQ'}
           </button>
           <button
             type="button"
             className="btn primary ide-mini"
             disabled={capturing !== null}
+            onClick={() => void runSnap('frame', 'agent')}
+            title="Grab still frame from live stream / RTSP and attach directly to Agent mode"
+          >
+            {capturing === 'frame-agent' ? 'Snapping Frame…' : '+ Snap Frame → Agent'}
+          </button>
+          <button
+            type="button"
+            className="btn ghost ide-mini"
+            disabled={capturing !== null}
+            onClick={() => void runSnap('agent', 'mcq')}
+            title="Attach a still frame from capture agent to MCQ mode"
+          >
+            {capturing === 'agent-mcq' ? 'Snapping Agent…' : '+ Snap Agent → MCQ'}
+          </button>
+          <button
+            type="button"
+            className="btn ghost ide-mini"
+            disabled={capturing !== null}
             onClick={() => void runSnap('agent', 'agent')}
-            title="Attach a still frame to the Agent pane"
+            title="Attach a still frame from capture agent to Agent mode"
           >
             {capturing === 'agent-agent' ? 'Snapping Agent…' : '+ Snap Agent → Agent'}
           </button>

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type PointerEvent } from 'react';
 import type { HidPlay } from './hidPayload.ts';
 import { releaseFrame } from './hidKeys.ts';
 import { StreamPane } from './StreamPane.tsx';
-import { languageForFile, problemTypeForFile, type EditorTab } from './types.ts';
+import { languageForFile, problemTypeForFile, type EditorTab, type SnapTarget } from './types.ts';
 import type { LiveMode } from './useHidLink.ts';
 
 type Props = {
@@ -31,7 +31,7 @@ type Props = {
   liveMode: LiveMode | null;
   onLive: (mode: LiveMode) => void;
   onLeaveLive: () => void;
-  onSnap: (kind: 'frame' | 'agent', target?: 'agent' | 'save', resetFirst?: boolean) => Promise<string>;
+  onSnap: (kind: 'frame' | 'agent', target?: SnapTarget, resetFirst?: boolean) => Promise<string>;
   onBindVideoGrabber: (fn: (() => Promise<Blob | null>) | null) => void;
   sendFrame: (buf: ArrayBuffer | null) => boolean;
   snapNote: string;
@@ -304,10 +304,32 @@ export function EditorPane({
               className="ide-menu-item"
               onClick={() => {
                 closeMenu();
+                void onSnap('frame', 'mcq');
+              }}
+            >
+              Snap frame → MCQ
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="ide-menu-item"
+              onClick={() => {
+                closeMenu();
                 void onSnap('frame', 'agent');
               }}
             >
               Snap frame → Agent
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="ide-menu-item"
+              onClick={() => {
+                closeMenu();
+                void onSnap('agent', 'mcq');
+              }}
+            >
+              Snap agent → MCQ
             </button>
             <button
               type="button"
@@ -379,6 +401,7 @@ export function EditorPane({
             suspended={streamSuspended}
             onLive={onLive}
             onLeaveLive={onLeaveLive}
+            onSnap={onSnap}
             sendFrame={sendFrame}
             onBindVideoGrabber={onBindVideoGrabber}
           />

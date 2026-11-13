@@ -25,6 +25,13 @@ export type TestCase = {
 
 export type AgentMode = 'ask' | 'mcq' | 'agent';
 
+export type SnapTarget = 'agent' | 'mcq' | 'save';
+
+export type IncomingAgentFile = {
+  file: File;
+  targetMode?: 'agent' | 'mcq';
+};
+
 export type AgentPhase = 'idle' | 'working' | 'needs_human' | 'solved' | 'blocked';
 
 export type AgentStep = 'idle' | 'identify' | 'cases' | 'harness' | 'solve' | 'test' | 'done';

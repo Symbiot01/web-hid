@@ -387,6 +387,18 @@ textarea:focus-visible {
   flex-shrink: 0;
 }
 
+.ide-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.ide-new-problem-btn {
+  white-space: nowrap;
+}
+
 .ide-panel-title {
   font-size: 0.78rem;
   color: var(--muted);
@@ -653,6 +665,18 @@ textarea:focus-visible {
   gap: 0.5rem;
   pointer-events: none;
   z-index: 3;
+}
+
+.ide-stream-source-switch,
+.ide-stream-snap-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  pointer-events: auto;
+}
+
+.ide-stream-snap-actions .btn.ghost {
+  background: rgba(11, 14, 20, 0.85);
 }
 
 .ide-stream-status {
