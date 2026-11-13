@@ -10,18 +10,20 @@ const {
 const MODEL = 'gemini-4-carbon';
 const MCQ_MODEL = 'gemini-4-hydrogen';
 const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_APPROACHES = 3;
 const MAX_COMPILE_FIXES = 3;
-const CASE_LIMIT = 12;
+const CASE_LIMIT = 60;
 const TEXT_LIMIT = 8_000;
 const SOURCE_LIMIT = 64 * 1024;
 const IMAGE_MAX = 4 * 1024 * 1024;
 const MAX_IMAGES = 15;
-const OUTPUT_LIMIT = 12_000;
+const MAX_CHAT_IMAGES = 50;
+const OUTPUT_LIMIT = 64_000;
 const THINKING_LIMIT = 6_000;
 const THOUGHT_LOG_LIMIT = 16;
 const DRAFT_PREVIEW_LIMIT = 2_400;
-const MESSAGE_LIMIT = 80;
+const MESSAGE_LIMIT = 160;
 
 const THINK_LABELS = {
   identify: 'reading the problem',
@@ -49,9 +51,14 @@ const TYPE_LABELS = {
 
 function extractDraftPreview(rawJson) {
   if (typeof rawJson !== 'string' || !rawJson) return '';
-  const fieldMatch = /"(?:source|statement|text|solution|reason)"\s*:\s*"((?:\\.|[^"\\])*)/.exec(rawJson);
-  if (!fieldMatch || !fieldMatch[1]) return '';
-  const decoded = fieldMatch[1]
+  const regex = /"(?:source|statement|text|solution|reason)"\s*:\s*"((?:\\.|[^"\\])*)/g;
+  let lastMatch = null;
+  let m;
+  while ((m = regex.exec(rawJson)) !== null) {
+    if (m[1]) lastMatch = m[1];
+  }
+  if (!lastMatch) return '';
+  const decoded = lastMatch
     .replace(/\\n/g, '\n')
     .replace(/\\r/g, '')
     .replace(/\\t/g, '  ')
@@ -632,6 +639,7 @@ function schemaFor(task) {
         functionName: { type: 'STRING' },
         signature: { type: 'STRING' },
         format: { type: 'STRING' },
+        isNewQuestion: { type: 'BOOLEAN' },
       },
       required: ['statement', 'casesFromProblem', 'cases', 'plan', 'functionName', 'format'],
     };
@@ -770,14 +778,15 @@ function promptFor(task, context) {
 
   if (task === 'identify') {
     const prior = statement
-      ? `\n\nExisting problem context (combine with the new image(s)/text):\n${statement}\n\nExisting cases:\n${cases}`
+      ? `\n\nExisting problem context (from earlier in this chat):\n${statement}\n\nExisting cases:\n${cases}`
       : '';
     return {
       system: [
         'You summarize programming, SQL, Bash, Docker, or DevOps problems from text or screenshots into your own concise technical specification.',
         'IMPORTANT: Never transcribe or copy problem story text verbatim from screenshots (verbatim copying triggers recitation filters). Always paraphrase and synthesize the mathematical/algorithmic or technical problem specification in your own words.',
-        'If multiple images/screenshots are provided, they show different parts of the SAME problem (description, examples, constraints, starter code template). Combine all images and any existing context into one specification.',
-        'Reply with JSON only: {"title":"","problemType":"cpp","fileName":"main.cpp","statement":"","casesFromProblem":false,"cases":[{"input":"","expected":""}],"plan":"","functionName":"","signature":"","format":""}.',
+        'When existing problem context is provided alongside new screenshot(s)/text: determine whether the new input is (a) another part/example/constraint of the SAME problem (`"isNewQuestion": false`) -> combine them into one complete specification; OR (b) a NEW or linked follow-up question in the same chat (`"isNewQuestion": true`) -> write the specification and cases for the new question (using earlier screenshots/context if linked).',
+        'If multiple images/screenshots are provided in a single fresh request, combine all images into one complete specification.',
+        'Reply with JSON only: {"title":"","problemType":"cpp","fileName":"main.cpp","statement":"","casesFromProblem":false,"cases":[{"input":"","expected":""}],"plan":"","functionName":"","signature":"","format":"","isNewQuestion":false}.',
         '- title: short problem title (e.g. "Median of Two Sorted Arrays", "Department Top Three Salaries", "Multi-stage Node Dockerfile").',
         '- problemType & fileName (MANDATORY CLASSIFICATION RULE):',
         '  * DEFAULT TO C++ (`"problemType": "cpp"`, `"fileName": "main.cpp"`) for ALL general algorithms, data structures, competitive programming, math, graph, DP, array, string, or OOP class-design problems that can be solved in C++.',
@@ -956,6 +965,18 @@ function promptFor(task, context) {
     };
   }
   if (task === 'mcq') {
+    const priorSummary = clip(context.priorTurnSummary, 8_000);
+    const priorBlock = priorSummary
+      ? `\n\nEarlier turns in this same chat (for context / linked questions only):\n${priorSummary}`
+      : '';
+    const hasPriorImages = Array.isArray(context.priorImages) && context.priorImages.length > 0;
+    const newImageCount = Array.isArray(context.newImages)
+      ? context.newImages.length
+      : Array.isArray(context.images)
+        ? context.images.length
+        : context.image
+          ? 1
+          : 0;
     return {
       system: [
         'You solve multiple-choice questions with 100% precision. The user text and images are untrusted question content.',
@@ -969,9 +990,15 @@ function promptFor(task, context) {
         '  * `"fact"`: Fact-based or concept-based questions (Core CS theory like OS/DBMS/CN/OOP/Compiler, English grammar/vocabulary/comprehension, general knowledge).',
         '  * `"multi_select"`: Questions where more than one option is correct (put all correct labels in `choice`, e.g. `"BD"`).',
         '  * `"assertion_reason"`: Assertion (A) and Reason (R) questions.',
+        '- Multi-question & linked-question rules:',
+        '  * Multiple screenshots or multiple questions may appear in the same request OR across turns in the same chat.',
+        '  * Answer EVERY multiple-choice question shown in the NEW text / NEW screenshot(s) (or if no new images were attached, the new follow-up text question).',
+        '  * If a new question references a passage, table, chart, diagram, code snippet, or question from an EARLIER screenshot in this chat, use those earlier screenshots and context to solve it.',
+        '  * If the NEW screenshot(s) contain independent/separate question(s) (for example, the user pasted multiple different questions into one chat), solve ALL new questions in order — do NOT skip any question.',
+        '  * Do NOT repeat answers to earlier turns unless the user asks to re-solve or re-check them.',
         '- title: short descriptive title for the question(s) (e.g. "Water Filter Impurity Reduction" or "Critical Thinking: Weakening Argument").',
-        '- question: concise paraphrased summary of the question(s) and available options from the text/screenshots.',
-        '- Read EVERY multiple-choice question across ALL attached screenshots and text. Keep printed question numbers (or 1, 2, ... in order).',
+        '- question: concise paraphrased summary of the question(s) and available options from the new text/screenshots.',
+        '- Keep printed question numbers (or 1, 2, ... in order).',
         '- For EVERY item in `answers`:',
         '  * `choice`: exact option label (A, B, C, D, True, False, or if options are unlettered radio/checkbox buttons use "Option 1", "Option 2", etc.).',
         '  * `option`: exact text of the chosen option(s).',
@@ -981,7 +1008,7 @@ function promptFor(task, context) {
         '- Return one answers item per question, in order. If nothing in the input is multiple choice, return an empty answers array and explain in note.',
         '- Do not write a program and do not claim any file was edited.',
       ].join('\n'),
-      user: `Question:\n${clip(context.text, 8_000) || '(see the attached screenshot(s))'}`,
+      user: `New request (${hasPriorImages ? `${context.priorImages.length} earlier screenshot(s) + ` : ''}${newImageCount} new screenshot(s)):\n${clip(context.text, 8_000) || '(see the attached screenshot(s))'}${priorBlock}`,
     };
   }
   return {
@@ -1056,15 +1083,35 @@ function createGemini({ apiKey, model, mcqModel, fetchImpl, onThought, onProgres
     const supportsThinkingLevel = /^gemini-[34]/i.test(activeModel);
     const built = promptFor(task, context);
     const parts = [{ text: built.user }];
-    const imageList = Array.isArray(context.images)
-      ? context.images
-      : context.image
-        ? [context.image]
-        : [];
-    for (const img of imageList) {
-      if (img && img.mime && img.data) {
-        parts.push({ inline_data: { mime_type: img.mime, data: img.data } });
-      }
+    const priorImages = Array.isArray(context.priorImages) ? context.priorImages : [];
+    const newImages = Array.isArray(context.newImages) ? context.newImages : [];
+    if (priorImages.length > 0 || newImages.length > 0) {
+      priorImages.forEach((img, idx) => {
+        if (img && img.mime && img.data) {
+          parts.push({ text: `[Earlier Screenshot #${idx + 1} from this same chat]` });
+          parts.push({ inline_data: { mime_type: img.mime, data: img.data } });
+        }
+      });
+      newImages.forEach((img, idx) => {
+        if (img && img.mime && img.data) {
+          parts.push({ text: `[New Screenshot #${priorImages.length + idx + 1} — solve/use this]` });
+          parts.push({ inline_data: { mime_type: img.mime, data: img.data } });
+        }
+      });
+    } else {
+      const imageList = Array.isArray(context.images)
+        ? context.images
+        : context.image
+          ? [context.image]
+          : [];
+      imageList.forEach((img, idx) => {
+        if (img && img.mime && img.data) {
+          if (imageList.length > 1) {
+            parts.push({ text: `[Screenshot #${idx + 1}]` });
+          }
+          parts.push({ inline_data: { mime_type: img.mime, data: img.data } });
+        }
+      });
     }
     const generationConfig = {
       temperature: task === 'solve' || task === 'retry' ? 0.25 : 0.1,
@@ -1237,7 +1284,7 @@ function formatRun(result) {
     .join('\n\n');
 }
 
-function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHistory }) {
+function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHistory, onGetHistory }) {
   const secret = apiKey || '';
   const listeners = new Set();
   let flushTimer = null;
@@ -1252,7 +1299,7 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
         clearTimeout(flushTimer);
         flushTimer = null;
       }
-      const snap = snapshot();
+      const snap = snapshot({ includeImages: false });
       for (const listener of listeners) {
         try {
           listener(snap);
@@ -1265,7 +1312,7 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
     if (flushTimer) return;
     flushTimer = setTimeout(() => {
       flushTimer = null;
-      const snap = snapshot();
+      const snap = snapshot({ includeImages: false });
       for (const listener of listeners) {
         try {
           listener(snap);
@@ -1411,6 +1458,63 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
   }
   talk.supportsHarness = Boolean(baseTalk && baseTalk.supportsHarness);
 
+  let mcqState = {
+    chatId: '',
+    title: '',
+    images: [],
+    messages: [],
+    cases: [],
+    statements: [],
+    approaches: [],
+    outputs: [],
+  };
+
+  function resetMcqState() {
+    mcqState = {
+      chatId: '',
+      title: '',
+      images: [],
+      messages: [],
+      cases: [],
+      statements: [],
+      approaches: [],
+      outputs: [],
+    };
+  }
+
+  function mcqSnapshot({ includeImages = false } = {}) {
+    const out = {
+      chatId: mcqState.chatId || null,
+      title: mcqState.title || '',
+      messages: mcqState.messages.map((item) => {
+        const msg = {
+          role: item.role === 'user' ? 'user' : 'assistant',
+          text: item.text,
+          kind: item.kind || (item.role === 'user' ? 'user' : 'step'),
+        };
+        if (Array.isArray(item.imageIndices) && item.imageIndices.length > 0) {
+          msg.imageIndices = item.imageIndices;
+        }
+        return msg;
+      }),
+      cases: mcqState.cases.map((item, idx) => ({
+        id: `mcq-${idx + 1}`,
+        input: item.input,
+        expected: item.expected,
+        actual: item.actual || '',
+        stderr: item.stderr || '',
+        reason: item.reason || null,
+        timeMs: typeof item.timeMs === 'number' ? item.timeMs : 0,
+        status: item.status || 'pass',
+      })),
+      imageCount: mcqState.images.length,
+    };
+    if (includeImages) {
+      out.images = mcqState.images.map((img) => ({ mime: img.mime, data: img.data }));
+    }
+    return out;
+  }
+
   state = {
     problemId: '',
     problemType: 'cpp',
@@ -1432,6 +1536,7 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
     images: [],
     source: '',
     approach: '',
+    archivedSolutions: [],
     hint: '',
     pendingHint: '',
     stopForCases: false,
@@ -1446,6 +1551,37 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
     thoughtLog: [],
   };
 
+  function archiveCurrentSolution() {
+    if (!state || (!state.source && !state.statement)) return;
+    const prevSource = state.source ? state.source.trim() : '';
+    const alreadyArchived = state.archivedSolutions.some(
+      (item) => item.source === prevSource && item.statement === state.statement,
+    );
+    if (alreadyArchived) return;
+    const archived = {
+      title: state.title || `Problem ${state.archivedSolutions.length + 1}`,
+      problemType: normalizeProblemType(state.problemType, state.fileName),
+      fileName: canonicalFileName(state.problemType, state.fileName),
+      statement: state.statement || '',
+      approach: state.approach || '',
+      source: prevSource,
+      phase: state.phase || 'solved',
+    };
+    state.archivedSolutions.push(archived);
+    if (archived.source) {
+      const lang = archived.problemType === 'cpp' ? 'cpp' : archived.problemType;
+      const summary = [
+        `Archived previous solution: **${archived.title}** (${archived.fileName})`,
+        archived.approach ? archived.approach : '',
+        `\`\`\`${lang}\n${archived.source}\n\`\`\``,
+      ]
+        .filter(Boolean)
+        .join('\n\n');
+      state.messages.push({ role: 'assistant', text: redact(clip(summary, 14_000), secret), kind: 'step' });
+      if (state.messages.length > MESSAGE_LIMIT) state.messages.splice(0, state.messages.length - MESSAGE_LIMIT);
+    }
+  }
+
   function persistHistory() {
     if (typeof onSaveHistory !== 'function') return;
     if (
@@ -1456,6 +1592,25 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
       return;
     }
     try {
+      const archived = Array.isArray(state.archivedSolutions) ? state.archivedSolutions : [];
+      const combinedStatement =
+        archived.length > 0
+          ? [
+              ...archived.map((item, idx) => `### Part ${idx + 1}: ${item.title}\n${item.statement}`),
+              `### Part ${archived.length + 1}: ${state.title || 'Current Problem'}\n${state.statement}`,
+            ]
+              .filter(Boolean)
+              .join('\n\n---\n\n')
+          : state.statement || '';
+      const combinedApproach =
+        archived.length > 0
+          ? [
+              ...archived.map((item, idx) => `### Part ${idx + 1}: ${item.title}\n${item.approach}`),
+              `### Part ${archived.length + 1}: ${state.title || 'Current Problem'}\n${state.approach}`,
+            ]
+              .filter(Boolean)
+              .join('\n\n')
+          : state.approach || '';
       onSaveHistory({
         id: state.problemId,
         title: redact(state.title || 'Untitled Problem', secret),
@@ -1465,14 +1620,20 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
         signature: redact(state.signature || '', secret),
         format: redact(state.format || '', secret),
         phase: state.phase || 'solved',
-        statement: redact(state.statement || '', secret),
-        approach: redact(state.approach || '', secret),
+        statement: redact(combinedStatement, secret),
+        approach: redact(combinedApproach, secret),
         source: redact(state.source || '', secret),
-        messages: state.messages.map((item) => ({
-          role: item.role === 'user' ? 'user' : 'assistant',
-          text: redact(item.text, secret),
-          kind: item.kind || (item.role === 'user' ? 'user' : 'step'),
-        })),
+        messages: state.messages.map((item) => {
+          const msg = {
+            role: item.role === 'user' ? 'user' : 'assistant',
+            text: redact(item.text, secret),
+            kind: item.kind || (item.role === 'user' ? 'user' : 'step'),
+          };
+          if (Array.isArray(item.imageIndices) && item.imageIndices.length > 0) {
+            msg.imageIndices = item.imageIndices;
+          }
+          return msg;
+        }),
         cases: state.cases.map((item) => ({
           input: redact(item.input, secret),
           expected: redact(item.expected, secret),
@@ -1483,7 +1644,7 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
           status: item.status || 'idle',
         })),
         images: Array.isArray(state.images)
-          ? state.images.slice(0, MAX_IMAGES).map((img) => ({
+          ? state.images.slice(0, MAX_CHAT_IMAGES).map((img) => ({
               mime: img.mime,
               data: img.data,
             }))
@@ -1541,9 +1702,9 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
     notify(false);
   }
 
-  function snapshot() {
+  function snapshot({ includeImages = true } = {}) {
     const now = Date.now();
-    return {
+    const out = {
       configured: secret.length >= 20,
       problemId: state.problemId || null,
       problemType: normalizeProblemType(state.problemType, state.fileName),
@@ -1556,11 +1717,17 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
       entry: state.entry,
       signature: state.signature,
       format: state.format,
-      messages: state.messages.map((item) => ({
-        role: item.role,
-        text: item.text,
-        kind: item.kind || (item.role === 'user' ? 'user' : 'step'),
-      })),
+      messages: state.messages.map((item) => {
+        const msg = {
+          role: item.role,
+          text: item.text,
+          kind: item.kind || (item.role === 'user' ? 'user' : 'step'),
+        };
+        if (Array.isArray(item.imageIndices) && item.imageIndices.length > 0) {
+          msg.imageIndices = item.imageIndices;
+        }
+        return msg;
+      }),
       source: state.source || null,
       cases: state.cases.map((item, index) => ({
         input: item.input,
@@ -1598,7 +1765,15 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
         status: item.status,
       })),
       running: state.running,
+      imageCount: Array.isArray(state.images) ? state.images.length : 0,
+      mcq: mcqSnapshot({ includeImages }),
     };
+    if (includeImages) {
+      out.images = Array.isArray(state.images)
+        ? state.images.map((img) => ({ mime: img.mime, data: img.data }))
+        : [];
+    }
+    return out;
   }
 
   function subscribe(listener) {
@@ -1609,7 +1784,7 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
     }
     listeners.add(listener);
     try {
-      listener(snapshot());
+      listener(snapshot({ includeImages: false }));
     } catch {
       // ignore
     }
@@ -2028,7 +2203,12 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
     }
   }
 
-  function reset() {
+  function reset(mode) {
+    if (mode === 'mcq') {
+      resetMcqState();
+      notify(true);
+      return snapshot({ includeImages: true });
+    }
     if (state.running && activeAbort) {
       activeAbort.abort();
       activeAbort = null;
@@ -2055,6 +2235,7 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
     state.images = [];
     state.source = '';
     state.approach = '';
+    state.archivedSolutions = [];
     state.hint = '';
     state.pendingHint = '';
     state.stopForCases = false;
@@ -2068,11 +2249,69 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
     state.draftChars = 0;
     state.thoughtLog = [];
     notify(true);
-    return snapshot();
+    return snapshot({ includeImages: true });
+  }
+
+  function restoreMcqFromHistoryItem(item) {
+    const rawImages = Array.isArray(item.images) ? item.images.slice(0, MAX_CHAT_IMAGES) : [];
+    const imgs = [];
+    for (const img of rawImages) {
+      const clean = normalizeImageItem(img);
+      if (clean) imgs.push(clean);
+    }
+    const msgs = Array.isArray(item.messages)
+      ? item.messages.slice(-MESSAGE_LIMIT).map((msg) => {
+          const out = {
+            role: msg && msg.role === 'user' ? 'user' : 'assistant',
+            text: redact(clip(msg && msg.text, 16_000), secret),
+            kind: msg && msg.kind ? msg.kind : msg && msg.role === 'user' ? 'user' : 'step',
+          };
+          if (Array.isArray(msg && msg.imageIndices)) {
+            const validIdx = msg.imageIndices.filter(
+              (idx) => typeof idx === 'number' && Number.isInteger(idx) && idx >= 0 && idx < imgs.length,
+            );
+            if (validIdx.length > 0) out.imageIndices = validIdx;
+          }
+          return out;
+        })
+      : [];
+    const cases = Array.isArray(item.cases)
+      ? item.cases.slice(0, CASE_LIMIT).map((raw) => {
+          const clean = sanitizeCaseItem(raw);
+          return {
+            input: clean.input,
+            expected: clean.expected,
+            actual: typeof raw.actual === 'string' ? sanitizeTextField(raw.actual) : '',
+            stderr: typeof raw.stderr === 'string' ? sanitizeTextField(raw.stderr) : '',
+            reason: raw.reason || null,
+            timeMs: typeof raw.timeMs === 'number' ? raw.timeMs : 0,
+            status: raw.status === 'pass' || raw.status === 'fail' ? raw.status : 'pass',
+          };
+        })
+      : [];
+    const statementText = clip(sanitizeTextField(item.statement), 64_000);
+    const approachText = clip(sanitizeTextField(item.approach), 32_000);
+    const sourceText = clip(sanitizeTextField(item.source || item.output || ''), 128_000);
+    mcqState = {
+      chatId: typeof item.id === 'string' && item.id ? item.id : crypto.randomUUID(),
+      title: clip(sanitizeTextField(item.title), 180),
+      images: imgs,
+      messages: msgs,
+      cases,
+      statements: statementText ? statementText.split(/\n{2,}---\n{2,}/).filter(Boolean) : [],
+      approaches: approachText ? approachText.split(/\n{2,}---\n{2,}/).filter(Boolean) : [],
+      outputs: sourceText ? [sourceText] : [],
+    };
   }
 
   function loadHistoryItem(item) {
     if (!item || typeof item !== 'object') refuse(400, 'Invalid history item');
+    const itemType = normalizeProblemType(item.problemType, item.fileName);
+    if (itemType === 'mcq') {
+      restoreMcqFromHistoryItem(item);
+      notify(true);
+      return snapshot({ includeImages: true });
+    }
     if (state.running && activeAbort) {
       activeAbort.abort();
       activeAbort = null;
@@ -2081,7 +2320,7 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
       busy();
     }
     state.problemId = typeof item.id === 'string' && item.id ? item.id : crypto.randomUUID();
-    state.problemType = normalizeProblemType(item.problemType, item.fileName);
+    state.problemType = itemType;
     state.fileName = canonicalFileName(state.problemType, item.fileName);
     const validPhases = new Set(['idle', 'working', 'needs_human', 'solved', 'blocked']);
     state.phase = validPhases.has(item.phase) && item.phase !== 'working' ? item.phase : 'solved';
@@ -2090,13 +2329,11 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
     state.startedAt = null;
     state.elapsedMs = 0;
     state.title = clip(sanitizeTextField(item.title), 160);
-    state.statement = clip(sanitizeTextField(item.statement), 12_000);
+    state.statement = clip(sanitizeTextField(item.statement), 64_000);
     state.entry =
-      state.problemType === 'mcq'
-        ? 'mcq'
-        : state.problemType === 'cpp'
-          ? entryFunction(item.entry || 'solve')
-          : clip(sanitizeTextField(item.entry), 64) || state.fileName;
+      state.problemType === 'cpp'
+        ? entryFunction(item.entry || 'solve')
+        : clip(sanitizeTextField(item.entry), 64) || state.fileName;
     state.signature = clip(sanitizeTextField(item.signature), 200);
     state.format = clip(sanitizeTextField(item.format), 1_000);
     state.casesFromProblem = true;
@@ -2115,21 +2352,33 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
           };
         })
       : [];
-    const restoredImages = Array.isArray(item.images)
-      ? normalizeImages({ images: item.images })
-      : { ok: false, images: [] };
-    state.images = restoredImages.ok ? restoredImages.images : [];
+    const rawRestoredImages = Array.isArray(item.images) ? item.images.slice(0, MAX_CHAT_IMAGES) : [];
+    state.images = [];
+    for (const img of rawRestoredImages) {
+      const clean = normalizeImageItem(img);
+      if (clean) state.images.push(clean);
+    }
     state.source = typeof item.source === 'string' ? cleanSource(item.source, state.problemType) : '';
-    state.approach = clip(sanitizeTextField(item.approach), 1_000);
+    state.approach = clip(sanitizeTextField(item.approach), 32_000);
+    state.archivedSolutions = [];
     state.hint = '';
     state.pendingHint = '';
     state.stopForCases = false;
     state.messages = Array.isArray(item.messages)
-      ? item.messages.slice(-MESSAGE_LIMIT).map((msg) => ({
-          role: msg && msg.role === 'user' ? 'user' : 'assistant',
-          text: redact(clip(msg && msg.text, 4_000), secret),
-          kind: msg && msg.kind ? msg.kind : msg && msg.role === 'user' ? 'user' : 'step',
-        }))
+      ? item.messages.slice(-MESSAGE_LIMIT).map((msg) => {
+          const out = {
+            role: msg && msg.role === 'user' ? 'user' : 'assistant',
+            text: redact(clip(msg && msg.text, 16_000), secret),
+            kind: msg && msg.kind ? msg.kind : msg && msg.role === 'user' ? 'user' : 'step',
+          };
+          if (Array.isArray(msg && msg.imageIndices)) {
+            const validIdx = msg.imageIndices.filter(
+              (idx) => typeof idx === 'number' && Number.isInteger(idx) && idx >= 0 && idx < state.images.length,
+            );
+            if (validIdx.length > 0) out.imageIndices = validIdx;
+          }
+          return out;
+        })
       : [];
     state.output = clip(typeof item.output === 'string' ? item.output : '', OUTPUT_LIMIT);
     state.failure = '';
@@ -2146,7 +2395,7 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
     state.draftChars = 0;
     state.thoughtLog = [];
     notify(true);
-    return snapshot();
+    return snapshot({ includeImages: true });
   }
 
   async function begin(input) {
@@ -2179,6 +2428,7 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
     state.images = images;
     state.source = '';
     state.approach = '';
+    state.archivedSolutions = [];
     state.failure = '';
     state.output = '';
     state.thinking = '';
@@ -2191,7 +2441,11 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
     state.stopForCases = false;
     const attachmentLabel = images.length > 1 ? `${images.length} images attached` : 'Image attached';
     const userLabel = text && images.length > 0 ? `${text}\n(${attachmentLabel})` : text || attachmentLabel;
-    state.messages = [{ role: 'user', text: redact(userLabel, secret), kind: 'user' }];
+    const firstMsg = { role: 'user', text: redact(userLabel, secret), kind: 'user' };
+    if (images.length > 0) {
+      firstMsg.imageIndices = images.map((_, idx) => idx);
+    }
+    state.messages = [firstMsg];
     say(
       images.length > 0
         ? `Analyzing ${images.length} attached screenshot${images.length === 1 ? '' : 's'} to extract the problem statement, signature, and sample cases…`
@@ -2316,7 +2570,7 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
     if (secret.length < 20) refuse(503, 'Agent is not configured');
     const action = input && input.action;
     if (action === 'reset') {
-      return reset();
+      return reset(input && input.mode);
     }
     if (action === 'cancel') {
       if (activeAbort) {
@@ -2389,8 +2643,12 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
       if (anyChanged) state.casesVerified = false;
     }
     if (extraImages.length > 0) {
-      state.images = [...state.images, ...extraImages].slice(-MAX_IMAGES);
-      const attachmentLabel = extraImages.length > 1 ? `${extraImages.length} images attached` : 'Image attached';
+      const priorImages = [...state.images];
+      const available = Math.max(0, MAX_CHAT_IMAGES - state.images.length);
+      const added = extraImages.slice(0, available);
+      const startIdx = state.images.length;
+      state.images = [...state.images, ...added];
+      const attachmentLabel = added.length > 1 ? `${added.length} images attached` : 'Image attached';
       const userMsg = text ? `${text}\n(${attachmentLabel})` : attachmentLabel;
       const runAbort = new AbortController();
       activeAbort = runAbort;
@@ -2398,11 +2656,16 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
       state.startedAt = Date.now();
       state.phase = 'working';
       state.step = 'identify';
-      state.messages.push({ role: 'user', text: redact(userMsg, secret), kind: 'user' });
+      archiveCurrentSolution();
+      const userEntry = { role: 'user', text: redact(userMsg, secret), kind: 'user' };
+      if (added.length > 0) {
+        userEntry.imageIndices = added.map((_, idx) => startIdx + idx);
+      }
+      state.messages.push(userEntry);
       notify(true);
       try {
         say(
-          `Combining ${extraImages.length} additional screenshot${extraImages.length === 1 ? '' : 's'} with the current problem (${state.images.length} total).`,
+          `Combining ${added.length} additional screenshot${added.length === 1 ? '' : 's'} with the current problem (${state.images.length} total).`,
         );
         const merged = await talk('identify', {
           text,
@@ -2410,6 +2673,8 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
           cases: state.cases,
           image: state.images[0] || null,
           images: state.images,
+          priorImages,
+          newImages: added,
           source: state.source,
           problemType: state.problemType,
           fileName: state.fileName,
@@ -2443,6 +2708,11 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
             state.problemType === 'cpp'
               ? entrySignature(state.entry, merged.signature)
               : clip(sanitizeTextField(merged.signature), 200) || state.signature;
+        }
+        if (merged && merged.isNewQuestion === true) {
+          state.cases = [];
+          state.casesVerified = false;
+          state.source = '';
         }
         if (merged && merged.format) state.format = clip(sanitizeTextField(merged.format), 1_000);
         if (merged && merged.casesFromProblem && validCases(merged.cases)) {
@@ -2583,112 +2853,182 @@ function createAgentControl({ apiKey, model, mcqModel, generate, run, onSaveHist
     const parsedImages = normalizeImages(input);
     if (!parsedImages.ok) refuse(400, `Up to ${MAX_IMAGES} JPEG, PNG, or WebP images under 4 MB each`);
     if (!text && parsedImages.images.length === 0) refuse(400, 'Paste a multiple-choice question or a screenshot');
+
+    const requestedChatId =
+      input && typeof input.chatId === 'string' && UUID_RE.test(input.chatId.trim())
+        ? input.chatId.trim().toLowerCase()
+        : '';
+    if (requestedChatId && mcqState.chatId !== requestedChatId && typeof onGetHistory === 'function') {
+      try {
+        const stored = onGetHistory(requestedChatId);
+        if (stored && normalizeProblemType(stored.problemType, stored.fileName) === 'mcq') {
+          restoreMcqFromHistoryItem(stored);
+        }
+      } catch {
+        // ignore history restore failure
+      }
+    }
+    if (!mcqState.chatId) {
+      mcqState.chatId = requestedChatId || crypto.randomUUID();
+    }
+
+    const priorImages = [...mcqState.images];
+    const availableSlots = Math.max(0, MAX_CHAT_IMAGES - priorImages.length);
+    const newImages = parsedImages.images.slice(0, availableSlots);
+    const combinedImages = [...priorImages, ...newImages];
+    const priorTurnSummary =
+      mcqState.cases.length > 0
+        ? mcqState.cases
+            .slice(-12)
+            .map((c, idx) => `Earlier Q${idx + 1}: ${c.input}\nAnswered: ${c.expected}`)
+            .join('\n\n')
+        : '';
+
     const answer = await talk('mcq', {
       text,
-      images: parsedImages.images,
-      image: parsedImages.images[0] || null,
+      images: combinedImages,
+      priorImages,
+      newImages,
+      priorTurnSummary,
+      image: combinedImages[0] || null,
       stageLabel: 'answering the choices',
     });
     const parsedItems = parseMcqAnswers(answer);
     const reply = redact(formatMcqAnswer(answer), secret) || 'No answer.';
     const attachmentLabel =
-      parsedImages.images.length > 1
-        ? `${parsedImages.images.length} images attached`
-        : parsedImages.images.length === 1
+      newImages.length > 1
+        ? `${newImages.length} images attached`
+        : newImages.length === 1
           ? 'Image attached'
           : '';
     const userLabel =
       text && attachmentLabel ? `${text}\n(${attachmentLabel})` : text || attachmentLabel || 'Multiple-choice question';
-    let savedId = null;
+
+    const startImageIdx = mcqState.images.length;
+    mcqState.images = combinedImages;
+    const userMsg = { role: 'user', text: redact(userLabel, secret), kind: 'user' };
+    if (newImages.length > 0) {
+      userMsg.imageIndices = newImages.map((_, idx) => startImageIdx + idx);
+    }
+    mcqState.messages.push(userMsg);
+    mcqState.messages.push({ role: 'assistant', text: reply, kind: 'step' });
+    if (mcqState.messages.length > MESSAGE_LIMIT) {
+      mcqState.messages.splice(0, mcqState.messages.length - MESSAGE_LIMIT);
+    }
+
+    const extractedTitle = clip(sanitizeTextField(answer && answer.title), 160);
+    const firstLine = text
+      ? clip(
+          text
+            .split(/\r?\n/)
+            .map((l) => l.trim())
+            .find(Boolean) || '',
+          120,
+        )
+      : '';
+    const fallbackTitle =
+      parsedItems.length === 1 && parsedItems[0].option
+        ? `MCQ: ${clip(parsedItems[0].option, 100)}`
+        : parsedItems.length > 1
+          ? `MCQ Set (${parsedItems.length} questions)`
+          : 'Multiple-Choice Question';
+    const turnTitle = redact(extractedTitle || firstLine || fallbackTitle, secret);
+
+    const extractedQuestion = clip(sanitizeTextField(answer && answer.question), 10_000);
+    const perItemQuestions = parsedItems
+      .filter((item) => item.question)
+      .map((item) => `Q${item.number}: ${item.question}`)
+      .join('\n\n');
+    const statementParts = [];
+    if (text) statementParts.push(text);
+    if (extractedQuestion && extractedQuestion !== text) statementParts.push(extractedQuestion);
+    if (!extractedQuestion && perItemQuestions) statementParts.push(perItemQuestions);
+    const turnStatement = redact(clip(statementParts.join('\n\n') || userLabel, 16_000), secret);
+
+    const turnApproach = redact(
+      clip(
+        parsedItems.length > 0
+          ? parsedItems
+              .map((item) => {
+                const cat = item.category ? ` [${MCQ_CATEGORY_LABELS[item.category]}]` : '';
+                const sol = item.solution ? `\nSolution: ${item.solution}` : '';
+                const why = item.reason ? `\nWhy right: ${item.reason}` : '';
+                return `${item.number}. ${item.choice}${item.option ? ` (${item.option})` : ''}${cat}${sol}${why}`;
+              })
+              .join('\n\n')
+          : sanitizeTextField(answer && answer.note) || reply,
+        16_000,
+      ),
+      secret,
+    );
+
+    const turnCases = parsedItems.map((item) => {
+      const expected = item.option ? `${item.choice} — ${item.option}` : item.choice;
+      return {
+        input: redact(
+          `${item.category ? `[${MCQ_CATEGORY_LABELS[item.category]}] ` : ''}${item.question || `Question ${item.number}`}`,
+          secret,
+        ),
+        expected: redact(expected, secret),
+        actual: redact(item.solution || '', secret),
+        stderr: redact(item.reason || '', secret),
+        reason: null,
+        timeMs: 0,
+        status: 'pass',
+      };
+    });
+
+    if (turnStatement) mcqState.statements.push(turnStatement);
+    if (turnApproach) mcqState.approaches.push(turnApproach);
+    if (reply) mcqState.outputs.push(reply);
+    mcqState.cases = [...mcqState.cases, ...turnCases].slice(0, CASE_LIMIT);
+
+    if (!mcqState.title) {
+      mcqState.title = turnTitle;
+    } else if (mcqState.cases.length > 1 && !mcqState.title.startsWith('MCQ Chat (')) {
+      const baseTitle = mcqState.title.replace(/^MCQ:\s*/i, '');
+      mcqState.title = clip(`MCQ Chat (${mcqState.cases.length} questions): ${baseTitle}`, 180);
+    } else if (mcqState.title.startsWith('MCQ Chat (')) {
+      mcqState.title = mcqState.title.replace(/^MCQ Chat \(\d+ questions\):/, `MCQ Chat (${mcqState.cases.length} questions):`);
+    }
+
+    let savedId = mcqState.chatId;
     if (typeof onSaveHistory === 'function') {
       try {
-        const extractedTitle = clip(sanitizeTextField(answer && answer.title), 160);
-        const firstLine = text
-          ? clip(
-              text
-                .split(/\r?\n/)
-                .map((l) => l.trim())
-                .find(Boolean) || '',
-              120,
-            )
-          : '';
-        const fallbackTitle =
-          parsedItems.length === 1 && parsedItems[0].option
-            ? `MCQ: ${clip(parsedItems[0].option, 100)}`
-            : parsedItems.length > 1
-              ? `MCQ Set (${parsedItems.length} questions)`
-              : 'Multiple-Choice Question';
-        const title = redact(extractedTitle || firstLine || fallbackTitle, secret);
-        const extractedQuestion = clip(sanitizeTextField(answer && answer.question), 10_000);
-        const perItemQuestions = parsedItems
-          .filter((item) => item.question)
-          .map((item) => `Q${item.number}: ${item.question}`)
-          .join('\n\n');
-        const statementParts = [];
-        if (text) statementParts.push(text);
-        if (extractedQuestion && extractedQuestion !== text) statementParts.push(extractedQuestion);
-        if (!extractedQuestion && perItemQuestions) statementParts.push(perItemQuestions);
-        const statement = redact(clip(statementParts.join('\n\n') || userLabel, 16_000), secret);
-        const approach = redact(
-          clip(
-            parsedItems.length > 0
-              ? parsedItems
-                  .map((item) => {
-                    const cat = item.category ? ` [${MCQ_CATEGORY_LABELS[item.category]}]` : '';
-                    const sol = item.solution ? `\nSolution: ${item.solution}` : '';
-                    const why = item.reason ? `\nWhy right: ${item.reason}` : '';
-                    return `${item.number}. ${item.choice}${item.option ? ` (${item.option})` : ''}${cat}${sol}${why}`;
-                  })
-                  .join('\n\n')
-              : sanitizeTextField(answer && answer.note) || reply,
-            4_000,
-          ),
-          secret,
-        );
-        const cases = parsedItems.map((item) => {
-          const expected = item.option ? `${item.choice} — ${item.option}` : item.choice;
-          return {
-            input: redact(
-              `${item.category ? `[${MCQ_CATEGORY_LABELS[item.category]}] ` : ''}${item.question || `Question ${item.number}`}`,
-              secret,
-            ),
-            expected: redact(expected, secret),
-            actual: redact(item.solution || '', secret),
-            stderr: redact(item.reason || '', secret),
-            reason: null,
-            timeMs: 0,
-            status: 'pass',
-          };
-        });
+        const combinedStatement = mcqState.statements.join('\n\n---\n\n');
+        const combinedApproach = mcqState.approaches.join('\n\n---\n\n');
+        const combinedOutput = mcqState.outputs.join('\n\n---\n\n');
         const saved = onSaveHistory({
-          id: crypto.randomUUID(),
-          title,
+          id: mcqState.chatId,
+          title: mcqState.title || turnTitle,
           problemType: 'mcq',
           fileName: 'mcq.md',
           entry: 'mcq',
-          signature: parsedItems.length > 0 ? `${parsedItems.length} MCQ${parsedItems.length === 1 ? '' : 's'}` : 'MCQ',
+          signature:
+            mcqState.cases.length > 0
+              ? `${mcqState.cases.length} MCQ${mcqState.cases.length === 1 ? '' : 's'}`
+              : 'MCQ',
           format: 'Multiple Choice',
-          phase: parsedItems.length > 0 ? 'solved' : 'needs_human',
-          statement,
-          approach,
-          source: reply,
-          messages: [
-            { role: 'user', text: redact(userLabel, secret), kind: 'user' },
-            { role: 'assistant', text: reply, kind: 'step' },
-          ],
-          cases,
-          images: parsedImages.images.slice(0, MAX_IMAGES).map((img) => ({
-            mime: img.mime,
-            data: img.data,
-          })),
-          output: reply,
+          phase: mcqState.cases.length > 0 ? 'solved' : 'needs_human',
+          statement: combinedStatement,
+          approach: combinedApproach,
+          source: combinedOutput,
+          messages: mcqState.messages,
+          cases: mcqState.cases,
+          images: mcqState.images.map((img) => ({ mime: img.mime, data: img.data })),
+          output: combinedOutput,
         });
         if (saved && saved.id) savedId = saved.id;
       } catch {
         // Do not fail MCQ response on history storage error.
       }
     }
-    return savedId ? { configured: true, text: reply, id: savedId } : { configured: true, text: reply };
+    return {
+      configured: true,
+      text: reply,
+      id: savedId,
+      mcq: mcqSnapshot({ includeImages: true }),
+    };
   }
 
   async function checkCode(input) {

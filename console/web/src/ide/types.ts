@@ -38,11 +38,41 @@ export type AgentStep = 'idle' | 'identify' | 'cases' | 'harness' | 'solve' | 't
 
 export type AgentKind = 'user' | 'problem' | 'plan' | 'step';
 
+export type ChatImage = {
+  mime: string;
+  data: string;
+};
+
 export type AgentMessage = {
   id: string;
   role: 'user' | 'assistant';
   text: string;
   kind?: AgentKind;
+  imageIndices?: number[];
+  images?: ChatImage[];
+};
+
+export type McqSessionView = {
+  chatId?: string | null;
+  title?: string;
+  messages: Array<{
+    role: 'user' | 'assistant';
+    text: string;
+    kind?: AgentKind;
+    imageIndices?: number[];
+  }>;
+  cases: Array<{
+    id: string;
+    input: string;
+    expected: string;
+    actual: string;
+    stderr?: string;
+    reason?: TestReason;
+    timeMs?: number;
+    status: TestStatus;
+  }>;
+  images?: ChatImage[];
+  imageCount?: number;
 };
 
 export type AgentThoughtEntry = {
@@ -70,8 +100,11 @@ export type AgentView = {
   entry?: string;
   signature?: string;
   format?: string;
-  messages: Array<{ role: 'user' | 'assistant'; text: string; kind?: AgentKind }>;
+  messages: Array<{ role: 'user' | 'assistant'; text: string; kind?: AgentKind; imageIndices?: number[] }>;
   source: string | null;
+  images?: ChatImage[];
+  imageCount?: number;
+  mcq?: McqSessionView;
   cases: Array<{
     id: string;
     input: string;

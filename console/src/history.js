@@ -14,13 +14,14 @@ const { normalizeProblemType, canonicalFileName } = require('./syntaxCheck');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_TITLE = 200;
-const MAX_STATEMENT = 16_000;
-const MAX_APPROACH = 4_000;
-const MAX_SOURCE = 64 * 1024;
-const MAX_OUTPUT = 16_000;
-const MAX_MESSAGES = 80;
-const MAX_CASES = 16;
-const MAX_IMAGES = 15;
+const MAX_STATEMENT = 64_000;
+const MAX_APPROACH = 32_000;
+const MAX_SOURCE = 256 * 1024;
+const MAX_OUTPUT = 64_000;
+const MAX_MESSAGES = 160;
+const MAX_MESSAGE_TEXT = 16_000;
+const MAX_CASES = 60;
+const MAX_IMAGES = 50;
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
@@ -45,11 +46,20 @@ function safeJsonParse(raw, fallback) {
 
 function sanitizeMessages(messages) {
   if (!Array.isArray(messages)) return [];
-  return messages.slice(-MAX_MESSAGES).map((item) => ({
-    role: item && item.role === 'user' ? 'user' : 'assistant',
-    text: clip(item && item.text, 4_000),
-    kind: item && typeof item.kind === 'string' ? clip(item.kind, 32) : item && item.role === 'user' ? 'user' : 'step',
-  }));
+  return messages.slice(-MAX_MESSAGES).map((item) => {
+    const out = {
+      role: item && item.role === 'user' ? 'user' : 'assistant',
+      text: clip(item && item.text, MAX_MESSAGE_TEXT),
+      kind: item && typeof item.kind === 'string' ? clip(item.kind, 32) : item && item.role === 'user' ? 'user' : 'step',
+    };
+    if (Array.isArray(item && item.imageIndices)) {
+      const indices = item.imageIndices
+        .filter((idx) => typeof idx === 'number' && Number.isInteger(idx) && idx >= 0 && idx < MAX_IMAGES)
+        .slice(0, MAX_IMAGES);
+      if (indices.length > 0) out.imageIndices = indices;
+    }
+    return out;
+  });
 }
 
 function sanitizeCases(cases) {

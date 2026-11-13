@@ -87,6 +87,7 @@ function createApp(opts) {
       model: config.geminiModel,
       mcqModel: config.geminiMcqModel,
       onSaveHistory: (record) => history.save(record),
+      onGetHistory: (id) => history.get(id),
       run: (source, cases) => {
         const body = { source, mode: 'tests', cases };
         const invalid = validateRun(body);
@@ -641,6 +642,7 @@ function createApp(opts) {
       const view = await agent.guide({
         text: body.text,
         action: body.action,
+        mode: body.mode,
         source: body.source,
         cases: body.cases,
         image,
@@ -682,6 +684,7 @@ function createApp(opts) {
         : undefined;
       const view = await agent.mcq({
         text: body.text,
+        chatId: body.chatId,
         image,
         images,
       });
@@ -740,7 +743,11 @@ function createApp(opts) {
     }
     try {
       const view = agent.loadHistoryItem(item);
-      return res.status(200).json({ ok: true, view });
+      return res.status(200).json({
+        ok: true,
+        openMode: item.problemType === 'mcq' ? 'mcq' : 'agent',
+        view,
+      });
     } catch (error) {
       return agentError(res, error);
     }

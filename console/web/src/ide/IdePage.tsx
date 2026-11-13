@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { AgentPane } from './AgentPane.tsx';
 import { EditorPane } from './EditorPane.tsx';
 import type { HidPlay } from './hidPayload.ts';
@@ -16,8 +16,10 @@ import {
   type AgentStep,
   type AgentThoughtEntry,
   type AgentView,
+  type ChatImage,
   type EditorTab,
   type IncomingAgentFile,
+  type McqSessionView,
   type ProblemType,
   type SnapTarget,
   type TestCase,
@@ -94,6 +96,7 @@ type Props = {
 };
 
 export function IdePage({ busy, onLogout }: Props) {
+  const location = useLocation();
   const [leftRatio, setLeftRatio] = useState(38);
   const [editorRatio, setEditorRatio] = useState(72);
   const [tabs, setTabs] = useState<EditorTab[]>(STARTER_TABS);
@@ -101,8 +104,13 @@ export function IdePage({ busy, onLogout }: Props) {
   const [cases, setCases] = useState<TestCase[]>(STARTER_CASES);
   const [activeCaseId, setActiveCaseId] = useState(STARTER_CASES[0].id);
   const [output, setOutput] = useState('');
-  const [mode, setMode] = useState<AgentMode>('agent');
+  const [mode, setMode] = useState<AgentMode>(() =>
+    new URLSearchParams(location.search).get('mode') === 'mcq' ? 'mcq' : 'agent',
+  );
   const [messages, setMessages] = useState<AgentMessage[]>([]);
+  const [agentImages, setAgentImages] = useState<ChatImage[]>([]);
+  const [mcqChatId, setMcqChatId] = useState<string | null>(null);
+  const [mcqImages, setMcqImages] = useState<ChatImage[]>([]);
   const [mcqMessages, setMcqMessages] = useState<AgentMessage[]>([]);
   const [mcqWorking, setMcqWorking] = useState(false);
   const [mcqActivity, setMcqActivity] = useState('');
@@ -444,9 +452,49 @@ export function IdePage({ busy, onLogout }: Props) {
   const pendingQuickMode = useRef<'ask' | 'mcq' | null>(null);
   const lastAppliedSourceRef = useRef<string | null>(null);
   const lastAppliedFileRef = useRef<string | null>(null);
+  const agentImagesRef = useRef<ChatImage[]>([]);
+  const mcqImagesRef = useRef<ChatImage[]>([]);
+
+  function resolveMessageImages(
+    items: Array<{ role: 'user' | 'assistant'; text: string; kind?: AgentView['messages'][number]['kind']; imageIndices?: number[] }>,
+    pool: ChatImage[],
+    prefix: string,
+  ): AgentMessage[] {
+    return items.map((item, index) => {
+      const resolved = Array.isArray(item.imageIndices)
+        ? item.imageIndices
+            .map((imgIdx) => pool[imgIdx])
+            .filter((img): img is ChatImage => Boolean(img && img.mime && img.data))
+        : undefined;
+      return {
+        id: `${prefix}-${index}`,
+        role: item.role,
+        text: item.text,
+        kind: item.kind,
+        imageIndices: item.imageIndices,
+        images: resolved && resolved.length > 0 ? resolved : undefined,
+      };
+    });
+  }
+
+  function applyMcqSession(mcq: McqSessionView | undefined) {
+    if (!mcq) return;
+    setMcqChatId(mcq.chatId ?? null);
+    const nextPool = Array.isArray(mcq.images) ? mcq.images : mcqImagesRef.current;
+    if (Array.isArray(mcq.images)) {
+      mcqImagesRef.current = mcq.images;
+      setMcqImages(mcq.images);
+    }
+    if (Array.isArray(mcq.messages)) {
+      setMcqMessages(resolveMessageImages(mcq.messages, nextPool, 'mcq-msg'));
+    }
+  }
 
   function applyAgent(view: AgentView) {
     setAgentReady(view.configured);
+    if (view.mcq) {
+      applyMcqSession(view.mcq);
+    }
     const activeQuickMode = pendingQuickMode.current;
     if (activeQuickMode === 'mcq') {
       setMcqThinking(view.thinking ?? '');
@@ -479,6 +527,11 @@ export function IdePage({ busy, onLogout }: Props) {
     if (Array.isArray(view.thoughtLog)) {
       setAgentThoughtLog(view.thoughtLog.filter((item) => item.task !== 'mcq' && item.task !== 'ask'));
     }
+    const nextPool = Array.isArray(view.images) ? view.images : agentImagesRef.current;
+    if (Array.isArray(view.images)) {
+      agentImagesRef.current = view.images;
+      setAgentImages(view.images);
+    }
     const targetFileName = view.fileName || 'main.cpp';
     const targetProblemType = view.problemType || problemTypeForFile(targetFileName);
     setAgentPhase(view.phase);
@@ -492,14 +545,7 @@ export function IdePage({ busy, onLogout }: Props) {
     setAgentSignature(view.signature ?? '');
     setAgentFormat(view.format ?? '');
     setAgentActivity(view.activity ?? '');
-    setMessages(
-      view.messages.map((item, index) => ({
-        id: `agent-msg-${index}`,
-        role: item.role,
-        text: item.text,
-        kind: item.kind,
-      })),
-    );
+    setMessages(resolveMessageImages(view.messages, nextPool, 'agent-msg'));
     const hasNewSource = typeof view.source === 'string' && view.source.length > 0;
     const fileChanged = view.phase !== 'idle' && targetFileName !== lastAppliedFileRef.current;
     const sourceChanged = hasNewSource && view.source !== lastAppliedSourceRef.current;
@@ -649,6 +695,7 @@ export function IdePage({ busy, onLogout }: Props) {
     const active = tabs.find((tab) => tab.id === activeTabId);
     const attachmentLabel = images.length > 1 ? `${images.length} images attached` : 'Image attached';
     const userLabel = text && images.length > 0 ? `${text}\n(${attachmentLabel})` : text || attachmentLabel;
+    const serializedTurnImages: ChatImage[] = images.map((item) => ({ mime: item.mime, data: item.base64 }));
     if (mode === 'agent') {
       const starting = agentPhase === 'idle';
       if (agentPhase !== 'working') {
@@ -670,11 +717,26 @@ export function IdePage({ busy, onLogout }: Props) {
       setAgentActivity(live);
       setMessages((prev) => [
         ...(starting ? [] : prev),
-        { id: nextId('msg'), role: 'user', text: userLabel, kind: 'user' },
+        {
+          id: nextId('msg'),
+          role: 'user',
+          text: userLabel,
+          kind: 'user',
+          images: serializedTurnImages.length > 0 ? serializedTurnImages : undefined,
+        },
         { id: nextId('msg'), role: 'assistant', text: live, kind: 'step' },
       ]);
     } else if (mode === 'mcq') {
-      setMcqMessages((prev) => [...prev, { id: nextId('msg'), role: 'user', text: userLabel, kind: 'user' }]);
+      setMcqMessages((prev) => [
+        ...prev,
+        {
+          id: nextId('msg'),
+          role: 'user',
+          text: userLabel,
+          kind: 'user',
+          images: serializedTurnImages.length > 0 ? serializedTurnImages : undefined,
+        },
+      ]);
     } else {
       setAskMessages((prev) => [...prev, { id: nextId('msg'), role: 'user', text: userLabel, kind: 'user' }]);
     }
@@ -713,7 +775,8 @@ export function IdePage({ busy, onLogout }: Props) {
               quickMode === 'mcq'
                 ? {
                     text,
-                    images: images.map((item) => ({ mime: item.mime, data: item.base64 })),
+                    chatId: mcqChatId || undefined,
+                    images: serializedTurnImages,
                   }
                 : {
                     text,
@@ -723,15 +786,25 @@ export function IdePage({ busy, onLogout }: Props) {
                   },
             ),
           });
-          const payload = (await response.json().catch(() => ({}))) as { text?: string; error?: string };
+          const payload = (await response.json().catch(() => ({}))) as {
+            text?: string;
+            error?: string;
+            id?: string;
+            mcq?: McqSessionView;
+          };
           const replyText = response.ok
             ? payload.text || payload.error || 'No answer.'
             : payload.error || `Request failed (${response.status})`;
           if (quickMode === 'mcq') {
-            setMcqMessages((prev) => [
-              ...prev,
-              { id: nextId('msg'), role: 'assistant', text: replyText },
-            ]);
+            if (payload.mcq) {
+              applyMcqSession(payload.mcq);
+            } else {
+              if (payload.id) setMcqChatId(payload.id);
+              setMcqMessages((prev) => [
+                ...prev,
+                { id: nextId('msg'), role: 'assistant', text: replyText },
+              ]);
+            }
           } else {
             setAskMessages((prev) => [
               ...prev,
@@ -836,6 +909,9 @@ export function IdePage({ busy, onLogout }: Props) {
 
   function guide(action: 'retry' | 'cases_wrong' | 'more_cases' | 'reset' | 'cancel') {
     if (action === 'reset' && mode === 'mcq') {
+      setMcqChatId(null);
+      mcqImagesRef.current = [];
+      setMcqImages([]);
       setMcqMessages([]);
       setMcqActivity('');
       setMcqThinking('');
@@ -847,6 +923,12 @@ export function IdePage({ busy, onLogout }: Props) {
       setMcqThoughtLog([]);
       setSnapNote('');
       setIncomingFiles([]);
+      void fetch('/api/agent/guide', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'reset', mode: 'mcq' }),
+      }).catch(() => undefined);
       return;
     }
     if (action === 'reset' && mode === 'ask') {
@@ -867,6 +949,8 @@ export function IdePage({ busy, onLogout }: Props) {
       if (action === 'reset') {
         agentOutput.current = '';
         pendingQuickMode.current = null;
+        agentImagesRef.current = [];
+        setAgentImages([]);
         setMessages([]);
         setAgentActivity('');
         setAgentThinking('');
@@ -1052,6 +1136,7 @@ export function IdePage({ busy, onLogout }: Props) {
             thoughtLog={mode === 'mcq' ? mcqThoughtLog : mode === 'ask' ? askThoughtLog : agentThoughtLog}
             cases={cases}
             configured={agentReady}
+            sessionImages={mode === 'mcq' ? mcqImages : mode === 'agent' ? agentImages : []}
             messages={mode === 'mcq' ? mcqMessages : mode === 'ask' ? askMessages : messages}
             incomingFiles={incomingFiles}
             onClearIncoming={() => setIncomingFiles([])}

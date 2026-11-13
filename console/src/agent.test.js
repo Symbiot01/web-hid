@@ -1151,10 +1151,13 @@ test('mcq persists every question, all screenshots, and solution into solved_his
   const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d]).toString('base64');
   const webpBytes = Buffer.concat([Buffer.from('RIFF\x00\x00\x00\x00WEBP'), Buffer.from([0x56, 0x50])]).toString('base64');
 
+  let mcqCallCount = 0;
+  let secondMcqContext = null;
   const agent = createAgentControl({
     apiKey: KEY,
     onSaveHistory: (record) => history.save(record),
-    generate: async (task) => {
+    onGetHistory: (id) => history.get(id),
+    generate: async (task, ctx) => {
       if (task === 'identify') {
         return {
           title: 'Active C++ Problem',
@@ -1174,6 +1177,32 @@ test('mcq persists every question, all screenshots, and solution into solved_his
         return {
           source: '#include <bits/stdc++.h>\nusing namespace std;\nvoid solve(){ cout << 42 << "\\n"; }\nint main(){ solve(); return 0; }\n',
           approach: 'Print 42.',
+        };
+      }
+      mcqCallCount += 1;
+      if (mcqCallCount === 2) {
+        secondMcqContext = {
+          priorImages: (ctx.priorImages || []).length,
+          newImages: (ctx.newImages || []).length,
+          totalImages: (ctx.images || []).length,
+          priorTurnSummary: ctx.priorTurnSummary || '',
+        };
+        return {
+          title: 'Weighted Average',
+          category: 'solution',
+          question: 'Weighted average of 2@$10 and 3@$25?',
+          answers: [
+            {
+              number: 3,
+              category: 'solution',
+              question: 'Weighted average of 2 items at $10 and 3 items at $25?',
+              choice: 'D',
+              option: '$19',
+              solution: '(2*10 + 3*25) / (2+3) = 95 / 5 = 19.',
+              reason: 'Total cost 95 divided by 5 items equals $19.',
+            },
+          ],
+          note: '',
         };
       }
       return {
@@ -1210,7 +1239,7 @@ test('mcq persists every question, all screenshots, and solution into solved_his
   const cppView = await agent.begin({ text: 'Print 42' });
   assert.equal(cppView.phase, 'solved');
 
-  // Now run two MCQs with multiple screenshots (including image/jpg + data URI prefix)
+  // Turn 1 in MCQ chat: 3 screenshots attached (including image/jpg + data URI prefix)
   const firstMcq = await agent.mcq({
     text: '',
     images: [
@@ -1227,45 +1256,146 @@ test('mcq persists every question, all screenshots, and solution into solved_his
   assert.match(firstMcq.text, /\*\*Why this is the right answer:\*\*/);
   assert.match(firstMcq.text, /2\. Option 1 — Over-the-counter availability · Logical Reasoning/);
 
+  // Turn 2 in the SAME MCQ chat (without clicking New problem): keeps same chatId & all 4 images!
   const secondMcq = await agent.mcq({
     text: 'Weighted average of 2@$10 and 3@$25?',
+    chatId: firstMcq.id,
     images: [{ mime: 'image/png', data: pngBytes }],
   });
-  assert.ok(secondMcq.id);
-  assert.notEqual(secondMcq.id, firstMcq.id);
+  assert.equal(secondMcq.id, firstMcq.id);
+  assert.deepEqual(secondMcqContext, {
+    priorImages: 3,
+    newImages: 1,
+    totalImages: 4,
+    priorTurnSummary: secondMcqContext.priorTurnSummary,
+  });
+  assert.match(secondMcqContext.priorTurnSummary, /D — 57\.9%/);
+  assert.equal(secondMcq.mcq.images.length, 4);
+  assert.equal(secondMcq.mcq.cases.length, 3);
+  assert.deepEqual(secondMcq.mcq.messages[0].imageIndices, [0, 1, 2]);
+  assert.deepEqual(secondMcq.mcq.messages[2].imageIndices, [3]);
 
   // Active C++ agent state was not clobbered by MCQ calls
   assert.equal(agent.snapshot().problemType, 'cpp');
   assert.match(agent.snapshot().source, /42/);
 
-  // History lists both MCQs under type=mcq and all screenshots are stored & retrieved
+  // History stores the combined MCQ chat with all 4 images and all 3 answers
   const mcqList = history.list({ type: 'mcq' });
-  assert.equal(mcqList.total, 2);
+  assert.equal(mcqList.total, 1);
   assert.equal(mcqList.items[0].problemType, 'mcq');
-  const firstSummary = mcqList.items.find((item) => item.id === firstMcq.id);
-  const secondSummary = mcqList.items.find((item) => item.id === secondMcq.id);
-  assert.ok(firstSummary);
-  assert.ok(secondSummary);
-  assert.equal(firstSummary.imageCount, 3);
-  assert.equal(secondSummary.imageCount, 1);
+  assert.equal(mcqList.items[0].imageCount, 4);
 
   const detail = history.get(firstMcq.id);
   assert.ok(detail);
   assert.equal(detail.problemType, 'mcq');
   assert.equal(detail.fileName, 'mcq.md');
-  assert.equal(detail.images.length, 3);
+  assert.equal(detail.images.length, 4);
   assert.equal(detail.images[0].mime, 'image/jpeg');
   assert.equal(detail.images[1].mime, 'image/png');
   assert.equal(detail.images[2].mime, 'image/webp');
-  assert.equal(detail.cases.length, 2);
+  assert.equal(detail.images[3].mime, 'image/png');
+  assert.equal(detail.cases.length, 3);
+  assert.equal(detail.messages.length, 4);
+  assert.deepEqual(detail.messages[0].imageIndices, [0, 1, 2]);
+  assert.deepEqual(detail.messages[2].imageIndices, [3]);
   assert.match(detail.source, /57\.9%/);
+  assert.match(detail.source, /\$19/);
   assert.equal(JSON.stringify(detail).includes(KEY), false);
 
-  // Restoring MCQ history item preserves mcq problemType and entry
+  // Clicking New problem in MCQ mode resets only MCQ chat and starts a new chatId on next send
+  const afterMcqReset = await agent.guide({ action: 'reset', mode: 'mcq' });
+  assert.equal(afterMcqReset.mcq.chatId, null);
+  assert.equal(afterMcqReset.mcq.images.length, 0);
+  assert.equal(afterMcqReset.problemType, 'cpp');
+
+  const thirdMcq = await agent.mcq({
+    text: 'Fresh MCQ chat',
+    images: [{ mime: 'image/png', data: pngBytes }],
+  });
+  assert.notEqual(thirdMcq.id, firstMcq.id);
+  assert.equal(history.list({ type: 'mcq' }).total, 2);
+
+  // Restoring MCQ history item restores mcqState without clobbering active C++ agent state
   const restored = agent.loadHistoryItem(detail);
-  assert.equal(restored.problemType, 'mcq');
-  assert.equal(restored.entry, 'mcq');
-  assert.equal(restored.fileName, 'mcq.md');
+  assert.equal(restored.problemType, 'cpp');
+  assert.equal(restored.mcq.chatId, firstMcq.id);
+  assert.equal(restored.mcq.images.length, 4);
+  assert.equal(restored.mcq.cases.length, 3);
+  assert.equal(restored.mcq.messages.length, 4);
+
+  history.close();
+});
+
+test('Agent mode archives previous solution and keeps all screenshots when a new question is attached in the same chat', async () => {
+  const history = createHistoryStore({ dbPath: ':memory:' });
+  const jpeg1 = { mime: 'image/jpeg', data: Buffer.from([0xff, 0xd8, 0xff, 1]).toString('base64') };
+  const jpeg2 = { mime: 'image/jpeg', data: Buffer.from([0xff, 0xd8, 0xff, 2]).toString('base64') };
+  const steps = {
+    identify: [
+      {
+        title: 'First Problem',
+        statement: 'Print 1.',
+        casesFromProblem: true,
+        cases: [{ input: '1\n', expected: '1\n' }],
+        plan: 'Print 1.',
+        functionName: 'solve',
+        signature: 'void solve()',
+        format: 'one int',
+      },
+      {
+        title: 'Second Problem',
+        statement: 'Print 2.',
+        casesFromProblem: true,
+        cases: [{ input: '1\n', expected: '2\n' }],
+        plan: 'Print 2.',
+        functionName: 'solve',
+        signature: 'void solve()',
+        format: 'one int',
+        isNewQuestion: true,
+      },
+    ],
+    review: [{ ok: true, reason: '' }, { ok: true, reason: '' }],
+    solve: [
+      {
+        source: '#include <bits/stdc++.h>\nusing namespace std;\nvoid solve(){ cout << 1 << "\\n"; }\nint main(){ solve(); return 0; }\n',
+        approach: 'Print 1.',
+      },
+      {
+        source: '#include <bits/stdc++.h>\nusing namespace std;\nvoid solve(){ cout << 2 << "\\n"; }\nint main(){ solve(); return 0; }\n',
+        approach: 'Print 2.',
+      },
+    ],
+  };
+
+  const agent = createAgentControl({
+    apiKey: KEY,
+    onSaveHistory: (record) => history.save(record),
+    generate: async (task) => steps[task].shift(),
+    run: async (_src, cases) => ({
+      status: 'ran',
+      compile: { ok: true, stderr: '' },
+      cases: cases.map((c) => ({ status: 'pass', actual: c.expected, reason: null, timeMs: 3 })),
+    }),
+  });
+
+  const first = await agent.begin({ text: 'First', images: [jpeg1] });
+  assert.equal(first.phase, 'solved');
+  assert.equal(first.images.length, 1);
+
+  const second = await agent.guide({ text: 'Second', images: [jpeg2] });
+  assert.equal(second.phase, 'solved');
+  assert.equal(second.images.length, 2);
+  assert.equal(second.cases.length, 1);
+  assert.equal(second.cases[0].expected, '2\n');
+  assert.ok(second.messages.some((m) => /Archived previous solution: \*\*First Problem\*\*/.test(m.text)));
+  assert.ok(second.messages.some((m) => /cout << 1/.test(m.text)));
+
+  const saved = history.get(second.problemId);
+  assert.ok(saved);
+  assert.equal(saved.images.length, 2);
+  assert.match(saved.statement, /First Problem/);
+  assert.match(saved.statement, /Second Problem/);
+  assert.ok(saved.messages.some((m) => /cout << 1/.test(m.text)));
 
   history.close();
 });

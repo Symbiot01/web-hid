@@ -48,7 +48,7 @@ type HistoryDetail = {
   statement: string;
   approach: string;
   source: string;
-  messages: Array<{ role: 'user' | 'assistant'; text: string; kind?: AgentKind }>;
+  messages: Array<{ role: 'user' | 'assistant'; text: string; kind?: AgentKind; imageIndices?: number[] }>;
   cases: Array<{
     input: string;
     expected: string;
@@ -247,7 +247,8 @@ export function HistoryPage() {
         setErrorMsg(body.error || 'Could not restore problem into IDE');
         return;
       }
-      navigate('/app');
+      const body = (await res.json().catch(() => ({}))) as { openMode?: string };
+      navigate(body.openMode === 'mcq' || detail.problemType === 'mcq' ? '/app?mode=mcq' : '/app');
     } catch {
       setErrorMsg('Could not restore problem into IDE');
     } finally {
@@ -675,9 +676,29 @@ export function HistoryPage() {
                       {detail.messages.map((msg, idx) => {
                         const kind = msg.kind || (msg.role === 'user' ? 'user' : 'step');
                         const label = msg.role === 'user' ? 'You' : kind === 'problem' ? 'Problem' : kind === 'plan' ? 'Plan' : 'Agent';
+                        const attachedIndices = Array.isArray(msg.imageIndices) ? msg.imageIndices : [];
                         return (
                           <li key={`m-${idx}`} className={`ide-msg ide-msg-${msg.role} ide-msg-${kind}`}>
                             <span className="ide-msg-role">{label}</span>
+                            {attachedIndices.length > 0 && detail.images ? (
+                              <div className="ide-msg-images">
+                                {attachedIndices.map((imgIdx) => {
+                                  const src = safeImageSrc(detail.images?.[imgIdx]);
+                                  if (!src) return null;
+                                  return (
+                                    <button
+                                      key={`m-${idx}-img-${imgIdx}`}
+                                      type="button"
+                                      className="ide-msg-img-btn"
+                                      title={`Open screenshot #${imgIdx + 1}`}
+                                      onClick={() => setLightboxIndex(imgIdx)}
+                                    >
+                                      <img src={src} alt={`Screenshot ${imgIdx + 1}`} className="ide-msg-img" />
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            ) : null}
                             <div className="ide-msg-body">
                               <pre className="hist-pre">{msg.text}</pre>
                             </div>

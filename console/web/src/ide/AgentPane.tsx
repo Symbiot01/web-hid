@@ -15,6 +15,7 @@ import {
   type AgentPhase,
   type AgentStep,
   type AgentThoughtEntry,
+  type ChatImage,
   type IncomingAgentFile,
   type ProblemType,
   type TestCase,
@@ -26,6 +27,16 @@ type ImageItem = ImagePayload & { id: string; name: string };
 const MAX_IMAGES = 15;
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+const SAFE_CHAT_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+function safeChatImageSrc(img: ChatImage | undefined | null): string | null {
+  if (!img || typeof img.mime !== 'string' || typeof img.data !== 'string') return null;
+  const mime = img.mime.trim().toLowerCase() === 'image/jpg' ? 'image/jpeg' : img.mime.trim().toLowerCase();
+  if (!SAFE_CHAT_MIMES.has(mime)) return null;
+  const cleanData = img.data.replace(/\s+/g, '');
+  if (!cleanData || !/^[A-Za-z0-9+/]+={0,2}$/.test(cleanData)) return null;
+  return `data:${mime};base64,${cleanData}`;
+}
 
 type Props = {
   mode: AgentMode;
@@ -49,6 +60,7 @@ type Props = {
   thoughtLog?: AgentThoughtEntry[];
   cases: TestCase[];
   configured: boolean;
+  sessionImages?: ChatImage[];
   messages: AgentMessage[];
   incomingFiles?: IncomingAgentFile[];
   onClearIncoming?: () => void;
@@ -226,6 +238,7 @@ export function AgentPane({
   thoughtLog = [],
   cases,
   configured,
+  sessionImages = [],
   messages,
   incomingFiles,
   onClearIncoming,
@@ -242,6 +255,7 @@ export function AgentPane({
   const [autoFollow, setAutoFollow] = useState(true);
   const [selectedThoughtId, setSelectedThoughtId] = useState<string | null>(null);
   const [copiedThoughts, setCopiedThoughts] = useState(false);
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   const [liveNow, setLiveNow] = useState(() => Date.now());
   const dragDepth = useRef(0);
   const imgCounter = useRef(0);
@@ -536,9 +550,36 @@ export function AgentPane({
   function renderMessage(message: AgentMessage) {
     const kind: AgentKind | 'note' = message.kind || (message.role === 'user' ? 'user' : 'note');
     const label = message.role === 'user' ? 'You' : kind === 'step' ? 'Status' : 'Agent';
+    const msgImages =
+      message.images && message.images.length > 0
+        ? message.images
+        : Array.isArray(message.imageIndices)
+          ? message.imageIndices
+              .map((idx) => sessionImages[idx])
+              .filter((img): img is ChatImage => Boolean(img))
+          : [];
     return (
       <li key={message.id} className={`ide-msg ide-msg-${message.role} ide-msg-${kind}`}>
         {kind === 'problem' || kind === 'plan' ? null : <span className="ide-msg-role">{label}</span>}
+        {msgImages.length > 0 ? (
+          <div className="ide-msg-images" aria-label="Attached screenshots">
+            {msgImages.map((img, idx) => {
+              const src = safeChatImageSrc(img);
+              if (!src) return null;
+              return (
+                <button
+                  key={`${message.id}-img-${idx}`}
+                  type="button"
+                  className="ide-msg-img-btn"
+                  title={`View screenshot #${idx + 1}`}
+                  onClick={() => setPreviewSrc(src)}
+                >
+                  <img src={src} alt={`Attached screenshot ${idx + 1}`} className="ide-msg-img" />
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
         {body(message)}
       </li>
     );
@@ -712,6 +753,11 @@ export function AgentPane({
           {runElapsed > 0 ? (
             <span className="ide-meta-chip" title="Elapsed run time">
               {formatDuration(runElapsed)}
+            </span>
+          ) : null}
+          {sessionImages.length > 0 ? (
+            <span className="ide-meta-chip" title="Total screenshots retained in this chat">
+              {sessionImages.length} img{sessionImages.length === 1 ? '' : 's'}
             </span>
           ) : null}
           {mode === 'agent' && working ? (
@@ -933,6 +979,29 @@ export function AgentPane({
           </button>
         </div>
       </form>
+      {previewSrc ? (
+        <div
+          className="ide-img-lightbox"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Screenshot preview"
+          onClick={() => setPreviewSrc(null)}
+        >
+          <img
+            src={previewSrc}
+            alt="Full screenshot preview"
+            className="ide-img-lightbox-img"
+            onClick={(e) => e.stopPropagation()}
+          />
+          <button
+            type="button"
+            className="btn primary ide-mini ide-img-lightbox-close"
+            onClick={() => setPreviewSrc(null)}
+          >
+            Close
+          </button>
+        </div>
+      ) : null}
     </section>
   );
 }
